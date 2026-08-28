@@ -275,6 +275,12 @@ class FloatingWindow(QWidget):
         title_row.setSpacing(12)
         self._title = QLabel("Better It")
         self._title.setObjectName("Title")
+        self._title.setStyleSheet("""
+            QLabel#Title {
+            font-size: 26px;
+            font-weight: 700;
+            }
+        """)
         # Make title area draggable
         self._title.mousePressEvent = self._mouse_press_event
         self._title.mouseMoveEvent = self._mouse_move_event
@@ -283,6 +289,27 @@ class FloatingWindow(QWidget):
         self._close_btn = QPushButton("✕")
         self._close_btn.setObjectName("CloseButton")
         self._close_btn.setFixedSize(30, 30)
+        self._close_btn.setStyleSheet("""
+            QPushButton#CloseButton {
+            border: none;
+            border-radius: 15px;
+            background-color: #e5e7eb;
+            color: #374151;
+            font-size: 16px;
+            font-weight: bold;
+            }
+
+            QPushButton#CloseButton:hover {
+            background-color: #ef4444;
+            color: white;
+            }
+
+            QPushButton#CloseButton:pressed {
+            background-color: #dc2626;
+            color: white;
+            }
+        """)
+
         title_row.addWidget(self._close_btn)
         root.addLayout(title_row)
 
