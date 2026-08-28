@@ -1,12 +1,14 @@
-"""Thin wrapper around the OpenAI chat completions API for grammar correction."""
+"""Thin wrapper around the OpenRouter chat completions API for grammar correction."""
 from __future__ import annotations
 
 import os
 import re
 
-from openai import OpenAI
+import requests
 
 from .prompts import GRAMMAR_SYSTEM
+
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 
 def _strip_wrappers(text: str) -> str:
@@ -26,8 +28,8 @@ class GrammarError(RuntimeError):
     """Raised when the LLM call fails or returns something unusable."""
 
 
-def correct_grammar(text: str, *, client: OpenAI | None = None, model: str | None = None) -> str:
-    """Send `text` to the LLM and return the grammar-corrected version.
+def correct_grammar(text: str, *, model: str | None = None) -> str:
+    """Send `text` to OpenRouter and return the grammar-corrected version.
 
     Raises GrammarError on API failure or empty response.
     """
@@ -35,34 +37,54 @@ def correct_grammar(text: str, *, client: OpenAI | None = None, model: str | Non
     if not text:
         raise GrammarError("No text to correct.")
 
-    api_key = os.environ.get("OPENAI_API_KEY")
+    api_key = os.environ.get("OPEN_ROUTER")
     if not api_key:
-        raise GrammarError("OPENAI_API_KEY is not set. Edit your .env file.")
+        raise GrammarError("OPEN_ROUTER is not set. Edit your .env file.")
 
-    client = client or OpenAI()
-    model = model or os.environ.get("MODEL", "gpt-4o-mini")
+    model = model or os.environ.get("MODEL", "openai/gpt-4o-mini")
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": GRAMMAR_SYSTEM},
+            {"role": "user", "content": text},
+        ],
+        "temperature": 0.2,
+    }
 
     try:
-        response = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": GRAMMAR_SYSTEM},
-                {"role": "user", "content": text},
-            ],
-            temperature=0.2,
+        response = requests.post(
+            OPENROUTER_URL,
+            headers=headers,
+            json=payload,
+            timeout=30,
         )
-    except Exception as exc:  # openai raises a variety of exception types
-        raise GrammarError(f"OpenAI request failed: {exc}") from exc
+    except requests.exceptions.Timeout:
+        raise GrammarError("Request to OpenRouter timed out.")
+    except requests.exceptions.RequestException as exc:
+        raise GrammarError(f"Network error: {exc}") from exc
 
-    if not response.choices:
-        raise GrammarError("OpenAI returned no choices.")
+    if response.status_code != 200:
+        raise GrammarError(
+            f"OpenRouter returned HTTP {response.status_code}: {response.text}"
+        )
 
-    content = response.choices[0].message.content
+    try:
+        data = response.json()
+        content = data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, ValueError) as exc:
+        raise GrammarError(f"Unexpected response format: {exc}") from exc
+
     if content is None:
-        raise GrammarError("OpenAI returned an empty message.")
+        raise GrammarError("OpenRouter returned an empty message.")
 
     cleaned = _strip_wrappers(content)
     if not cleaned:
-        raise GrammarError("OpenAI returned an empty result after cleaning.")
+        raise GrammarError("OpenRouter returned an empty result after cleaning.")
 
     return cleaned

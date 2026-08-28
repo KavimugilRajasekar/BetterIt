@@ -11,7 +11,7 @@ dependencies = [
     "PySide6>=6.6",
     "keyboard>=0.13",
     "pyperclip>=1.8",
-    "openai>=1.30",
+    "requests>=2.31",
     "python-dotenv>=1.0",
     "pywin32>=306",
 ]
