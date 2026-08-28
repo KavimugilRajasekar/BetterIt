@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aiwriter"
+version = "0.1.0"
+description = "System-wide AI writing assistant: select text anywhere, hit Ctrl+Space, get a grammar-corrected version back."
+requires-python = ">=3.10"
+dependencies = [
+    "PySide6>=6.6",
+    "keyboard>=0.13",
+    "pyperclip>=1.8",
+    "openai>=1.30",
+    "python-dotenv>=1.0",
+    "pywin32>=306",
+]
+
+[project.scripts]
+aiwriter = "aiwriter.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
