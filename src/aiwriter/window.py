@@ -2,25 +2,132 @@
 The always-on-top floating window shown when the hotkey fires.
 Drag & movable, fixed size, completely rounded corners,
 green theme with slight transparency and clean layout.
+
+Includes a Tag selector (left of the "Polish" button) that lets the user
+pick a preset "mode" (Chat, LinkedIn Post, Email, ...) or create/edit a
+custom tag with its own prompt via the TagEditorDialog window.
 """
 
 from __future__ import annotations
 
+import json
+import sys
 from pathlib import Path
 
-import sys
-
 from PySide6.QtCore import Qt, QTimer, QSize, Signal, QPoint
-from PySide6.QtGui import QColor, QPainter, QPen, QMouseEvent, QBrush
+from PySide6.QtGui import (
+    QBitmap,
+    QBrush,
+    QColor,
+    QFontDatabase,
+    QMouseEvent,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QRegion,
+)
 from PySide6.QtWidgets import (
     QApplication,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
+    QMessageBox,
     QPushButton,
+    QSizePolicy,
     QTextEdit,
     QVBoxLayout,
     QWidget,
 )
+
+
+# --- Window geometry ---------------------------------------------------------
+# The fixed window must be tall enough to fit every row without squeezing/
+# overlapping content. Computed generously from the sum of each row's height
+# plus margins/spacing (see _build_ui for the actual rows).
+WINDOW_WIDTH = 460
+WINDOW_HEIGHT = 560
+CORNER_RADIUS = 26
+
+
+# --- Tag storage --------------------------------------------------------------
+
+DEFAULT_TAGS: dict[str, str] = {
+    "Chat": (
+        "Improve grammar, spelling, and clarity while keeping a casual, "
+        "friendly tone suitable for a chat message. Keep it short."
+    ),
+    "LinkedIn Post": (
+        "Rewrite this as a polished, professional LinkedIn post. Keep it "
+        "concise, engaging, and appropriate for a professional network audience."
+    ),
+    "Email": (
+        "Rewrite this as a clear, polite, and professional email while "
+        "preserving the original intent and any specific details."
+    ),
+    "Twitter/X Post": (
+        "Rewrite this as a punchy, concise post suitable for Twitter/X. "
+        "Keep the core message but make it snappy and casual."
+    ),
+}
+
+
+class TagStore:
+    """Loads/saves user-defined tags (name -> prompt) to a small JSON file
+    that lives next to this script, seeded with a few useful defaults."""
+
+    def __init__(self) -> None:
+        self._path = Path(__file__).resolve().parent / "tags.json"
+        self._tags: dict[str, str] = {}
+        self.load()
+
+    def load(self) -> None:
+        if self._path.exists():
+            try:
+                data = json.loads(self._path.read_text(encoding="utf-8"))
+                if isinstance(data, dict) and data:
+                    self._tags = {str(k): str(v) for k, v in data.items()}
+                    return
+            except (json.JSONDecodeError, OSError):
+                pass
+        # Fall back to (and persist) the defaults.
+        self._tags = dict(DEFAULT_TAGS)
+        self.save()
+
+    def save(self) -> None:
+        try:
+            self._path.write_text(
+                json.dumps(self._tags, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
+
+    def names(self) -> list[str]:
+        return sorted(self._tags.keys(), key=str.lower)
+
+    def prompt_for(self, name: str) -> str:
+        return self._tags.get(name, "")
+
+    def set_tag(self, name: str, prompt: str) -> None:
+        self._tags[name] = prompt
+        self.save()
+
+    def rename(self, old_name: str, new_name: str, prompt: str) -> None:
+        if old_name in self._tags and old_name != new_name:
+            del self._tags[old_name]
+        self._tags[new_name] = prompt
+        self.save()
+
+    def delete(self, name: str) -> bool:
+        """Returns False (and refuses) if this would remove the last tag."""
+        if len(self._tags) <= 1 or name not in self._tags:
+            return False
+        del self._tags[name]
+        self.save()
+        return True
 
 
 # --- Styling ----------------------------------------------------------------
@@ -51,6 +158,13 @@ QLabel#PaneLabel {
     font-family: 'Comfortaa';
 }
 
+QLabel#TagLabel {
+    color: #1a5a1a;
+    font-size: 12px;
+    font-weight: 700;
+    font-family: 'Comfortaa';
+}
+
 QTextEdit {
     background-color: rgba(255, 255, 255, 0.88);
     color: #0a1a0a;
@@ -71,6 +185,47 @@ QTextEdit#ImprovedPane[state="error"] {
     color: #c0392b;
     border-color: #0a0a0a;
     background-color: rgba(255, 230, 230, 0.85);
+}
+
+QLineEdit {
+    background-color: rgba(255, 255, 255, 0.88);
+    color: #0a1a0a;
+    border: 2px solid #0a0a0a;
+    border-radius: 14px;
+    padding: 8px 12px;
+    font-size: 13px;
+    font-family: 'Comfortaa';
+}
+
+QComboBox {
+    background-color: rgba(255, 255, 255, 0.9);
+    color: #0a2e0a;
+    border: 2px solid #0a0a0a;
+    border-radius: 16px;
+    padding: 6px 12px;
+    font-size: 12px;
+    font-weight: 700;
+    font-family: 'Comfortaa';
+}
+
+QComboBox:hover {
+    border-color: #0a0a0a;
+    background-color: rgba(255, 255, 255, 1.0);
+}
+
+QComboBox::drop-down {
+    border: none;
+    width: 20px;
+}
+
+QComboBox QAbstractItemView {
+    background-color: #ffffff;
+    color: #0a2e0a;
+    border: 2px solid #0a0a0a;
+    border-radius: 8px;
+    selection-background-color: #a8d5a8;
+    outline: none;
+    padding: 4px;
 }
 
 QPushButton {
@@ -114,13 +269,13 @@ QPushButton#Primary:pressed {
 }
 
 QPushButton#CloseButton {
-    background-color: transparent;
-    color: #0a0a0a;
-    border: 2px solid #0a0a0a;
-    font-size: 18px;
+    background-color: #e5e7eb;
+    color: #374151;
+    border: none;
+    font-size: 16px;
     font-weight: 700;
     padding: 0;
-    border-radius: 30px;
+    border-radius: 15px;
     min-width: 30px;
     max-width: 30px;
     min-height: 30px;
@@ -129,8 +284,29 @@ QPushButton#CloseButton {
 
 QPushButton#CloseButton:hover {
     color: #ffffff;
-    background-color: #c0392b;
-    border-color: #0a0a0a;
+    background-color: #ef4444;
+}
+
+QPushButton#CloseButton:pressed {
+    background-color: #dc2626;
+}
+
+QPushButton#IconButton {
+    background-color: rgba(255, 255, 255, 0.9);
+    color: #1b5e20;
+    border: 2px solid #0a0a0a;
+    border-radius: 16px;
+    font-size: 14px;
+    font-weight: 700;
+    padding: 0;
+    min-width: 32px;
+    max-width: 32px;
+    min-height: 32px;
+    max-height: 32px;
+}
+
+QPushButton#IconButton:hover {
+    background-color: #a8d5a8;
 }
 
 QPushButton#Replace {
@@ -179,6 +355,11 @@ class Spinner(QWidget):
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._advance)
         self.setFixedSize(20, 20)
+        # Reserve the space even when hidden so neighboring widgets
+        # (status label / Polish button) don't jump around.
+        size_policy = self.sizePolicy()
+        size_policy.setRetainSizeWhenHidden(True)
+        self.setSizePolicy(size_policy)
         self.hide()
 
     def start(self) -> None:
@@ -209,6 +390,119 @@ class Spinner(QWidget):
         painter.drawArc(2, 2, self.width() - 4, self.height() - 4, start, span)
 
 
+# --- Tag editor dialog -------------------------------------------------------
+
+class TagEditorDialog(QDialog):
+    """A small standalone window for creating or editing a tag + its prompt."""
+
+    def __init__(
+        self,
+        parent: QWidget | None,
+        existing_names: list[str],
+        name: str = "",
+        prompt: str = "",
+    ) -> None:
+        super().__init__(parent)
+        self._is_edit = bool(name)
+        self._original_name = name
+        self._existing_names = existing_names
+
+        self.setWindowTitle("Edit Tag" if self._is_edit else "New Tag")
+        self.setModal(True)
+        self.setMinimumWidth(360)
+        self.setStyleSheet(STYLESHEET)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(12)
+
+        name_label = QLabel("Tag name")
+        name_label.setObjectName("TagLabel")
+        layout.addWidget(name_label)
+
+        self._name_edit = QLineEdit(name)
+        self._name_edit.setPlaceholderText("e.g. LinkedIn Post")
+        layout.addWidget(self._name_edit)
+
+        prompt_label = QLabel("Prompt")
+        prompt_label.setObjectName("TagLabel")
+        layout.addWidget(prompt_label)
+
+        self._prompt_edit = QTextEdit(prompt)
+        self._prompt_edit.setPlaceholderText(
+            "Describe how the text should be rewritten when this tag is selected..."
+        )
+        self._prompt_edit.setFixedHeight(140)
+        layout.addWidget(self._prompt_edit)
+
+        button_row = QHBoxLayout()
+        button_row.setSpacing(10)
+
+        if self._is_edit:
+            self._delete_btn = QPushButton("Delete")
+            self._delete_btn.setStyleSheet(
+                "QPushButton { background-color: #c0392b; }"
+                "QPushButton:hover { background-color: #e74c3c; }"
+            )
+            self._delete_btn.clicked.connect(self._on_delete)
+            button_row.addWidget(self._delete_btn)
+
+        button_row.addStretch(1)
+
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        button_row.addWidget(cancel_btn)
+
+        save_btn = QPushButton("Save")
+        save_btn.setObjectName("Primary")
+        save_btn.clicked.connect(self._on_save)
+        button_row.addWidget(save_btn)
+
+        layout.addLayout(button_row)
+
+        self._delete_requested = False
+
+    # -- results --------------------------------------------------------
+
+    @property
+    def delete_requested(self) -> bool:
+        return self._delete_requested
+
+    def result_values(self) -> tuple[str, str]:
+        return self._name_edit.text().strip(), self._prompt_edit.toPlainText().strip()
+
+    # -- validation -------------------------------------------------------
+
+    def _on_save(self) -> None:
+        name, prompt = self.result_values()
+        if not name:
+            QMessageBox.warning(self, "Missing name", "Please give this tag a name.")
+            return
+        if not prompt:
+            QMessageBox.warning(self, "Missing prompt", "Please write a prompt for this tag.")
+            return
+
+        clashes = any(
+            existing.lower() == name.lower() and existing != self._original_name
+            for existing in self._existing_names
+        )
+        if clashes:
+            QMessageBox.warning(self, "Duplicate tag", f'A tag named "{name}" already exists.')
+            return
+
+        self.accept()
+
+    def _on_delete(self) -> None:
+        confirm = QMessageBox.question(
+            self,
+            "Delete tag",
+            f'Delete the tag "{self._original_name}"?',
+        )
+        if confirm == QMessageBox.Yes:
+            self._delete_requested = True
+            self.accept()
+
+
 # --- Main window ------------------------------------------------------------
 
 class FloatingWindow(QWidget):
@@ -218,8 +512,8 @@ class FloatingWindow(QWidget):
     """
 
     # Signals — the owning app connects these to the LLM worker / paste-back.
-    correct_requested = Signal(str)   # emits the original text
-    replace_requested = Signal(str)   # emits the corrected text
+    correct_requested = Signal(str, str)  # emits (original text, tag prompt)
+    replace_requested = Signal(str)       # emits the corrected text
     closed = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -227,30 +521,30 @@ class FloatingWindow(QWidget):
         self.setObjectName("FloatingWindow")
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)
         self.setAttribute(Qt.WA_TranslucentBackground)
-        self.setFixedSize(QSize(440, 400))
-        self.setMask(self._rounded_mask(440, 400, 28))
-        
+        self.setFixedSize(QSize(WINDOW_WIDTH, WINDOW_HEIGHT))
+        self.setMask(self._rounded_mask(WINDOW_WIDTH, WINDOW_HEIGHT, CORNER_RADIUS))
+
+        self._tag_store = TagStore()
+
         # For dragging
         self._drag_pos: QPoint | None = None
 
         # Main container with rounded corners and transparency
         self._container = QWidget(self)
-        self._container.setGeometry(0, 0, 440, 400)
+        self._container.setGeometry(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT)
         self._container.setObjectName("FloatingWindow")
         self._container.setStyleSheet(STYLESHEET)
-        
+
         self._build_ui()
         self._wire_signals()
         self._reset_to_idle()
-        
+
         # Enable dragging from container
         self._container.mousePressEvent = self._mouse_press_event
         self._container.mouseMoveEvent = self._mouse_move_event
 
     def _rounded_mask(self, width: int, height: int, radius: int):
         """Return a raster mask matching the rounded window shell."""
-        from PySide6.QtGui import QBitmap, QRegion
-
         bitmap = QBitmap(width, height)
         bitmap.fill(Qt.color0)
 
@@ -275,12 +569,7 @@ class FloatingWindow(QWidget):
         title_row.setSpacing(12)
         self._title = QLabel("Better It")
         self._title.setObjectName("Title")
-        self._title.setStyleSheet("""
-            QLabel#Title {
-            font-size: 26px;
-            font-weight: 700;
-            }
-        """)
+        self._title.setStyleSheet("QLabel#Title { font-size: 24px; font-weight: 700; }")
         # Make title area draggable
         self._title.mousePressEvent = self._mouse_press_event
         self._title.mouseMoveEvent = self._mouse_move_event
@@ -289,27 +578,6 @@ class FloatingWindow(QWidget):
         self._close_btn = QPushButton("✕")
         self._close_btn.setObjectName("CloseButton")
         self._close_btn.setFixedSize(30, 30)
-        self._close_btn.setStyleSheet("""
-            QPushButton#CloseButton {
-            border: none;
-            border-radius: 15px;
-            background-color: #e5e7eb;
-            color: #374151;
-            font-size: 16px;
-            font-weight: bold;
-            }
-
-            QPushButton#CloseButton:hover {
-            background-color: #ef4444;
-            color: white;
-            }
-
-            QPushButton#CloseButton:pressed {
-            background-color: #dc2626;
-            color: white;
-            }
-        """)
-
         title_row.addWidget(self._close_btn)
         root.addLayout(title_row)
 
@@ -317,20 +585,54 @@ class FloatingWindow(QWidget):
         root.addWidget(self._make_pane_label("Original"))
         self._original = QTextEdit()
         self._original.setReadOnly(True)
-        self._original.setFixedHeight(88)
+        self._original.setFixedHeight(80)
         root.addWidget(self._original)
 
-        # Action row: spinner + status + button
+        # Tag row: label + selector + edit + new-tag buttons.
+        # This sits directly above the Polish button, satisfying the
+        # "tag selector to the left of Polish" requirement while leaving
+        # every control room to breathe.
+        tag_row = QHBoxLayout()
+        tag_row.setSpacing(8)
+
+        tag_label = QLabel("Tag")
+        tag_label.setObjectName("TagLabel")
+        tag_row.addWidget(tag_label)
+
+        self._tag_combo = QComboBox()
+        self._tag_combo.setMinimumWidth(150)
+        self._tag_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self._refresh_tag_combo()
+        tag_row.addWidget(self._tag_combo, 1)
+
+        self._edit_tag_btn = QPushButton("✎")
+        self._edit_tag_btn.setObjectName("IconButton")
+        self._edit_tag_btn.setToolTip("Edit selected tag")
+        tag_row.addWidget(self._edit_tag_btn)
+
+        self._new_tag_btn = QPushButton("+")
+        self._new_tag_btn.setObjectName("IconButton")
+        self._new_tag_btn.setToolTip("Create a new tag")
+        tag_row.addWidget(self._new_tag_btn)
+
+        root.addLayout(tag_row)
+
+        # Action row: spinner + status + Polish button (tag selector above
+        # already sits to its left visually; keeping Polish on its own row
+        # gives it a full-width comfortable hit target with no crowding).
         action_row = QHBoxLayout()
         action_row.setSpacing(12)
         self._spinner = Spinner(self._container)
         action_row.addWidget(self._spinner)
         self._status_label = QLabel("")
-        self._status_label.setStyleSheet("color: #1a5a1a; font-size: 13px; font-weight: 600; font-family: 'Comfortaa';")
+        self._status_label.setStyleSheet(
+            "color: #1a5a1a; font-size: 13px; font-weight: 600; font-family: 'Comfortaa';"
+        )
         action_row.addWidget(self._status_label, 1)
         self._correct_btn = QPushButton("Polish")
         self._correct_btn.setObjectName("Primary")
         self._correct_btn.setFixedHeight(40)
+        self._correct_btn.setMinimumWidth(100)
         action_row.addWidget(self._correct_btn)
         root.addLayout(action_row)
 
@@ -339,7 +641,7 @@ class FloatingWindow(QWidget):
         self._improved = QTextEdit()
         self._improved.setObjectName("ImprovedPane")
         self._improved.setReadOnly(True)
-        self._improved.setFixedHeight(108)
+        self._improved.setFixedHeight(120)
         root.addWidget(self._improved)
 
         # Replace row
@@ -349,6 +651,7 @@ class FloatingWindow(QWidget):
         self._replace_btn.setObjectName("Replace")
         self._replace_btn.setEnabled(False)
         self._replace_btn.setFixedHeight(40)
+        self._replace_btn.setMinimumWidth(110)
         replace_row.addWidget(self._replace_btn)
         root.addLayout(replace_row)
 
@@ -361,6 +664,52 @@ class FloatingWindow(QWidget):
         self._close_btn.clicked.connect(self.hide_window)
         self._correct_btn.clicked.connect(self._on_correct_clicked)
         self._replace_btn.clicked.connect(self._on_replace_clicked)
+        self._new_tag_btn.clicked.connect(self._on_new_tag_clicked)
+        self._edit_tag_btn.clicked.connect(self._on_edit_tag_clicked)
+
+    # -- Tag management -------------------------------------------------
+
+    def _refresh_tag_combo(self, select: str | None = None) -> None:
+        current = select or self._tag_combo.currentText() if self._tag_combo.count() else select
+        self._tag_combo.blockSignals(True)
+        self._tag_combo.clear()
+        names = self._tag_store.names()
+        self._tag_combo.addItems(names)
+        if current and current in names:
+            self._tag_combo.setCurrentText(current)
+        elif names:
+            self._tag_combo.setCurrentIndex(0)
+        self._tag_combo.blockSignals(False)
+
+    def _on_new_tag_clicked(self) -> None:
+        dialog = TagEditorDialog(self, existing_names=self._tag_store.names())
+        if dialog.exec() == QDialog.Accepted:
+            name, prompt = dialog.result_values()
+            self._tag_store.set_tag(name, prompt)
+            self._refresh_tag_combo(select=name)
+
+    def _on_edit_tag_clicked(self) -> None:
+        current_name = self._tag_combo.currentText()
+        if not current_name:
+            return
+        dialog = TagEditorDialog(
+            self,
+            existing_names=self._tag_store.names(),
+            name=current_name,
+            prompt=self._tag_store.prompt_for(current_name),
+        )
+        if dialog.exec() == QDialog.Accepted:
+            if dialog.delete_requested:
+                if self._tag_store.delete(current_name):
+                    self._refresh_tag_combo()
+                else:
+                    QMessageBox.information(
+                        self, "Can't delete", "At least one tag must remain."
+                    )
+                return
+            name, prompt = dialog.result_values()
+            self._tag_store.rename(current_name, name, prompt)
+            self._refresh_tag_combo(select=name)
 
     # -- Drag implementation -------------------------------------------------
 
@@ -459,8 +808,10 @@ class FloatingWindow(QWidget):
         text = self._original.toPlainText().strip()
         if not text:
             return
+        tag_name = self._tag_combo.currentText()
+        prompt = self._tag_store.prompt_for(tag_name)
         self.show_loading()
-        self.correct_requested.emit(text)
+        self.correct_requested.emit(text, prompt)
 
     def _on_replace_clicked(self) -> None:
         text = self._improved.toPlainText()
@@ -483,19 +834,14 @@ class FloatingWindow(QWidget):
         """Ensure the window has fully rounded corners with transparency."""
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
-        
-        # Create a rounded rectangle path
+
         path = QPainterPath()
         rect = self.rect()
-        radius = 20
-        path.addRoundedRect(rect, radius, radius)
-        
-        # Fill with transparent background
+        path.addRoundedRect(rect, CORNER_RADIUS, CORNER_RADIUS)
+
         painter.setBrush(QBrush(QColor(0, 0, 0, 0)))
         painter.setPen(Qt.NoPen)
         painter.drawPath(path)
-        
-        # Set the clip path to keep everything within rounded corners
         painter.setClipPath(path)
 
 
@@ -530,44 +876,43 @@ def load_fonts() -> None:
 
 class DemoWindow(QWidget):
     """A simple demo window to test the FloatingWindow."""
-    
+
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("Floating Window Demo")
         self.setFixedSize(400, 200)
-        
+
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel("Click the button to show the floating window:"))
-        
+
         self.demo_text = QTextEdit()
         self.demo_text.setPlainText("This is a demo sentence with bad grammar and spelling errors.")
         layout.addWidget(self.demo_text)
-        
+
         show_btn = QPushButton("Show Floating Window")
         show_btn.clicked.connect(self._show_floating)
         layout.addWidget(show_btn)
-        
+
         self.floating = FloatingWindow()
         self.floating.correct_requested.connect(self._on_correct_requested)
         self.floating.replace_requested.connect(self._on_replace_requested)
-        
+
     def _show_floating(self) -> None:
         text = self.demo_text.toPlainText()
         if text:
             self.floating.show_for_text(text)
-            
-    def _on_correct_requested(self, text: str) -> None:
-        # Simulate LLM processing
+
+    def _on_correct_requested(self, text: str, prompt: str) -> None:
+        # Simulate LLM processing (in the real app, `prompt` would be sent
+        # to the LLM along with `text` to steer the rewrite for this tag).
         self.floating.show_loading()
-        
-        # Simulate async response
         QTimer.singleShot(1500, lambda: self._simulate_response(text))
-        
+
     def _simulate_response(self, text: str) -> None:
         # Simple "correction" (just uppercase first letter of each word)
         corrected = " ".join(word.capitalize() for word in text.split())
         self.floating.show_improved(corrected)
-        
+
     def _on_replace_requested(self, text: str) -> None:
         self.demo_text.setPlainText(text)
         self.floating.hide_window()
@@ -576,10 +921,10 @@ class DemoWindow(QWidget):
 def main() -> None:
     """Main entry point for standalone testing."""
     app = QApplication(sys.argv)
-    
+
     demo = DemoWindow()
     demo.show()
-    
+
     sys.exit(app.exec())
 
 
