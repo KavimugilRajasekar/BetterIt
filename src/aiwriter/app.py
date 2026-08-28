@@ -8,7 +8,7 @@ import sys
 from typing import Optional
 
 from dotenv import load_dotenv
-from PySide6.QtCore import QObject, QThread, QTimer, Signal
+from PySide6.QtCore import QObject, QThread, QTimer, Signal, Qt
 from PySide6.QtGui import QAction, QIcon
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
@@ -102,16 +102,16 @@ class AIWriterApp:
         try:
             selected = clipboard.read_selected()
         except Exception as exc:
-            self._window.show_error(f"Could not read selection: {exc}")
+            msg = f"Could not read selection: {exc}"
+            QTimer.singleShot(0, lambda: self._window.show_error(msg))
             return
 
         if not selected or not selected.strip():
-            # Nothing was selected — silently do nothing. Don't even flash the
-            # window; that would be annoying if the user pressed the hotkey
-            # by accident.
+            # Nothing was selected — silently do nothing.
             return
 
-        self._window.show_for_text(selected)
+        # Marshal onto the GUI thread before touching any Qt widget.
+        QTimer.singleShot(0, lambda: self._window.show_for_text(selected))
 
     def _on_correct_requested(self, text: str) -> None:
         """User clicked Correct Grammar. Run the LLM in a worker thread."""
@@ -123,12 +123,12 @@ class AIWriterApp:
         worker.moveToThread(thread)
 
         thread.started.connect(worker.run)
-        worker.finished.connect(self._on_llm_finished)
-        worker.failed.connect(self._on_llm_failed)
+        worker.finished.connect(self._on_llm_finished, Qt.ConnectionType.QueuedConnection)
+        worker.failed.connect(self._on_llm_failed, Qt.ConnectionType.QueuedConnection)
 
         # Once the worker is done, quit the thread.
-        worker.finished.connect(thread.quit)
-        worker.failed.connect(thread.quit)
+        worker.finished.connect(thread.quit, Qt.ConnectionType.QueuedConnection)
+        worker.failed.connect(thread.quit, Qt.ConnectionType.QueuedConnection)
         thread.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
 
