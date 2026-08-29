@@ -86,7 +86,7 @@ def transform_text(
         raise GrammarError("No text provided to transform.")
 
     store = TagStore()
-    api_key = (api_key or store.get_active_api_key() or os.environ.get("OPEN_ROUTER", "")).strip()
+    api_key = (api_key or store.get_active_api_key() or "").strip()
     if not api_key:
         raise GrammarError("API Key is not configured. Please open Settings -> AI Model and set your API key.")
 
@@ -117,7 +117,7 @@ def transform_text(
     except requests.exceptions.Timeout:
         raise GrammarError("Request to OpenRouter timed out. Please check your network connection.")
     except requests.exceptions.RequestException as exc:
-        raise GrammarError(f"Network error: {exc}") from exc
+        raise GrammarError("Network error") from exc
 
     if response.status_code != 200:
         error_detail = response.text
@@ -148,7 +148,7 @@ def transform_text(
 def test_reachability(api_key: str | None = None, model: str | None = None) -> tuple[bool, str]:
     """Test if the given API key and model can reach OpenRouter and receive a valid response."""
     store = TagStore()
-    api_key = (api_key or store.get_active_api_key() or os.environ.get("OPEN_ROUTER", "")).strip()
+    api_key = (api_key or store.get_active_api_key() or "").strip()
     if not api_key:
         return False, "API key is missing. Please enter your API key."
 
@@ -181,7 +181,7 @@ def test_reachability(api_key: str | None = None, model: str | None = None) -> t
     except requests.exceptions.Timeout:
         return False, "Connection timed out after 15 seconds."
     except requests.exceptions.RequestException as exc:
-        return False, f"Network error: {exc}"
+        return False, "Network error"
     except Exception as exc:
         return False, f"Error: {exc}"
 
