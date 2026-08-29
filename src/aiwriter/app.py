@@ -256,11 +256,11 @@ class AIWriterApp(QObject):
     @Slot(str)
     def _on_qr_finished(self, corrected: str) -> None:
         """Quick Replace succeeded — paste result back silently."""
-        # Detect obviously garbled / unusable output (empty, or same as original
-        # but with weird markers that suggest the LLM couldn't handle it).
+        # Detect obviously garbled / unusable output (empty, or contains 'Jumple'
+        # which indicates the LLM couldn't handle the text).
         stripped = corrected.strip()
-        if not stripped:
-            self._show_qr_error("The AI returned an empty response and could not replace the selection.")
+        if not stripped or "jumple" in stripped.lower():
+            self._show_qr_error("Operation cannot be done because the AI returned an unusable response.")
             return
         QTimer.singleShot(80, lambda: self._do_qr_paste(corrected))
 

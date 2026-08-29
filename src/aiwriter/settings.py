@@ -409,8 +409,8 @@ class ExpandOverlay(QFrame):
 
         hdr = QHBoxLayout()
         lbl = QLabel(title_text)
-        lbl.setStyleSheet("color: #0a0a0a; font-size: 15px; font-weight: 700;"
-                          " font-family: 'Playwrite US Modern', 'Comfortaa', sans-serif;")
+        lbl.setStyleSheet("color: #0a0a0a; font-size: 20px; font-weight: 700; letter-spacing: 0.5px;"
+                              " font-family: 'Playwrite US Modern', 'Comfortaa', sans-serif;")
         hdr.addWidget(lbl)
         hdr.addStretch(1)
 
@@ -659,7 +659,7 @@ class EditTagPage(QWidget):
         nb.clicked.connect(self._on_new); ll.addWidget(nb)
         layout.addWidget(left_card)
 
-        right_card = QFrame(); right_card.setObjectName("SettingsCard")
+        right_card = QFrame(); right_card.setObjectName("SingleWhiteCard")
         rl = QVBoxLayout(right_card); rl.setContentsMargins(16, 16, 16, 16); rl.setSpacing(10)
 
         nl = QLabel("Tag Name"); nl.setObjectName("SectionLabel"); rl.addWidget(nl)
