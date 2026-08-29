@@ -8,10 +8,11 @@ spacious cards, rounded interactive controls, animated pipeline, and themed popu
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Any, Optional
 
 from PySide6.QtCore import (
-    QByteArray, QEasingCurve, QObject, QPoint, QPropertyAnimation,
+    QByteArray, QEasingCurve, QObject, QPoint, QPropertyAnimation, QRect,
     QSize, Qt, QThread, QTimer, QVariantAnimation, Signal, Slot,
 )
 from PySide6.QtGui import (
@@ -78,6 +79,28 @@ POPUP_CORNER_RADIUS = 24
 #   stroke-based, no filled areas, rounded caps, dark (#1a1a1a) strokes.
 
 _SVG_ICONS: dict[str, str] = {
+    "expand": """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+        stroke="{color}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="15 3 21 3 21 9"/>
+        <polyline points="9 21 3 21 3 15"/>
+        <line x1="21" y1="3" x2="14" y2="10"/>
+        <line x1="3" y1="21" x2="10" y2="14"/>
+    </svg>""",
+
+    "shrink": """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+        stroke="{color}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="4 14 10 14 10 20"/>
+        <polyline points="20 10 14 10 14 4"/>
+        <line x1="14" y1="10" x2="21" y2="3"/>
+        <line x1="10" y1="14" x2="3" y2="21"/>
+    </svg>""",
+
+    "return": """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+        stroke="{color}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M9 14L4 9l5-5"/>
+        <path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5v0a5.5 5.5 0 0 1-5.5 5.5H11"/>
+    </svg>""",
+
     "trash": """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
         stroke="{color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <polyline points="3 6 5 6 21 6"/>
@@ -241,6 +264,126 @@ def _icon_btn(
     return btn
 
 
+class HoverIconButton(QPushButton):
+    """QPushButton that swaps icons smoothly on mouse enter / leave."""
+    def __init__(self, normal_icon: QIcon, hover_icon: QIcon, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._normal_icon = normal_icon
+        self._hover_icon = hover_icon
+        self.setIcon(self._normal_icon)
+
+    def enterEvent(self, event) -> None:
+        if not self._hover_icon.isNull():
+            self.setIcon(self._hover_icon)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        if not self._normal_icon.isNull():
+            self.setIcon(self._normal_icon)
+        super().leaveEvent(event)
+
+
+class ExpandOverlay(QFrame):
+    """
+    Animated overlay frame that expands a text edit to cover the container window
+    and shrinks back when the shrink button is pressed.
+    """
+    def __init__(
+        self,
+        target_edit: QTextEdit,
+        parent_container: QWidget,
+        title_text: str,
+        start_widget: QWidget,
+    ) -> None:
+        super().__init__(parent_container)
+        self.setObjectName("SettingsCard")
+        self.setStyleSheet("""
+            QFrame#SettingsCard {
+                background-color: rgba(226, 244, 226, 0.98);
+                border: 2.5px solid #0a0a0a;
+                border-radius: 20px;
+            }
+        """)
+        self._target_edit = target_edit
+        self._parent_container = parent_container
+        self._start_widget = start_widget
+        self._anim: QPropertyAnimation | None = None
+        self._start_rect: QRect = QRect()
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(10)
+
+        hdr = QHBoxLayout()
+        lbl = QLabel(title_text)
+        lbl.setObjectName("SectionLabel")
+        hdr.addWidget(lbl)
+        hdr.addStretch(1)
+
+        norm_shrink = _svg_icon("shrink", "#1b5e20", 16)
+        hov_shrink = _svg_icon("shrink", "#000000", 16)
+        self.shrink_btn = HoverIconButton(norm_shrink, hov_shrink)
+        self.shrink_btn.setFixedSize(30, 30)
+        self.shrink_btn.setToolTip("Shrink view")
+        self.shrink_btn.setObjectName("MinimizeButton")
+        self.shrink_btn.clicked.connect(self.animate_shrink)
+        hdr.addWidget(self.shrink_btn)
+        layout.addLayout(hdr)
+
+        self._cloned_edit = QTextEdit()
+        self._cloned_edit.setPlainText(target_edit.toPlainText())
+        self._cloned_edit.setReadOnly(target_edit.isReadOnly())
+        self._cloned_edit.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._cloned_edit.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._cloned_edit.setStyleSheet(target_edit.styleSheet())
+        layout.addWidget(self._cloned_edit, 1)
+
+        self._updating = False
+        if not target_edit.isReadOnly():
+            self._cloned_edit.textChanged.connect(self._sync_to_target)
+            target_edit.textChanged.connect(self._sync_from_target)
+
+    def _sync_to_target(self) -> None:
+        if self._updating: return
+        self._updating = True
+        self._target_edit.setPlainText(self._cloned_edit.toPlainText())
+        self._updating = False
+
+    def _sync_from_target(self) -> None:
+        if self._updating: return
+        self._updating = True
+        self._cloned_edit.setPlainText(self._target_edit.toPlainText())
+        self._updating = False
+
+    def animate_expand(self) -> None:
+        start_pt = self._start_widget.mapTo(self._parent_container, QPoint(0, 0))
+        self._start_rect = QRect(start_pt, self._start_widget.size())
+        end_rect = self._parent_container.rect().adjusted(14, 14, -14, -14)
+
+        self.setGeometry(self._start_rect)
+        self.show()
+        self.raise_()
+
+        self._anim = QPropertyAnimation(self, b"geometry", self)
+        self._anim.setDuration(260)
+        self._anim.setEasingCurve(QEasingCurve.OutCubic)
+        self._anim.setStartValue(self._start_rect)
+        self._anim.setEndValue(end_rect)
+        self._anim.start()
+
+    def animate_shrink(self) -> None:
+        if self._anim and self._anim.state() == QPropertyAnimation.Running:
+            self._anim.stop()
+
+        self._anim = QPropertyAnimation(self, b"geometry", self)
+        self._anim.setDuration(220)
+        self._anim.setEasingCurve(QEasingCurve.InCubic)
+        self._anim.setStartValue(self.geometry())
+        self._anim.setEndValue(self._start_rect)
+        self._anim.finished.connect(self.close)
+        self._anim.start()
+
+
 def _get_active_icon(colored: bool, size: int = 18) -> QIcon:
     """Load active.png (colored) or not_active.png (inactive) as a QIcon."""
     asset = "active.png" if colored else "not_active.png"
@@ -402,18 +545,23 @@ class EditTagPage(QWidget):
         super().__init__(parent)
         self._store = tag_store
         self._current_name: str | None = None
+        self._saved_name: str | None = None
+        self._saved_prompt: str | None = None
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(14)
 
         left_card = QFrame(); left_card.setObjectName("SettingsCard")
-        ll = QVBoxLayout(left_card); ll.setContentsMargins(14, 14, 14, 14); ll.setSpacing(10)
-        QLabel("Your Tags", objectName="SectionLabel").__class__  # noqa
+        left_card.setFixedWidth(145)
+        ll = QVBoxLayout(left_card); ll.setContentsMargins(10, 10, 10, 10); ll.setSpacing(8)
         lbl = QLabel("Your Tags"); lbl.setObjectName("SectionLabel"); ll.addWidget(lbl)
-        self._list = QListWidget(); self._list.setObjectName("TagList"); self._list.setFixedWidth(190)
+        self._list = QListWidget(); self._list.setObjectName("TagList")
+        self._list.setWordWrap(True)
+        self._list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._list.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         ll.addWidget(self._list, 1)
-        nb = QPushButton("+ New Tag"); nb.setObjectName("Secondary"); nb.setFixedHeight(38)
+        nb = QPushButton("+ New Tag"); nb.setObjectName("Secondary"); nb.setFixedHeight(34)
         nb.clicked.connect(self._on_new); ll.addWidget(nb)
         layout.addWidget(left_card)
 
@@ -422,6 +570,7 @@ class EditTagPage(QWidget):
 
         nl = QLabel("Tag Name"); nl.setObjectName("SectionLabel"); rl.addWidget(nl)
         self._name_edit = QLineEdit(); self._name_edit.setPlaceholderText("e.g. LinkedIn Post, Professional Email…")
+        self._name_edit.textChanged.connect(self._check_dirty)
         rl.addWidget(self._name_edit)
 
         pl = QLabel("Instructions"); pl.setObjectName("SectionLabel"); rl.addWidget(pl)
@@ -433,7 +582,17 @@ class EditTagPage(QWidget):
         self._md_btn = QPushButton("Markdown"); self._md_btn.setObjectName("ViewToggle")
         self._md_btn.setCheckable(True)
         self._md_btn.clicked.connect(self._show_md); vt.addWidget(self._md_btn)
-        vt.addStretch(1); rl.addLayout(vt)
+        vt.addStretch(1)
+
+        norm_exp = _svg_icon("expand", "#1b5e20", 16)
+        hov_exp = _svg_icon("expand", "#000000", 16)
+        self._prompt_expand_btn = HoverIconButton(norm_exp, hov_exp)
+        self._prompt_expand_btn.setObjectName("IconButton")
+        self._prompt_expand_btn.setFixedSize(30, 30)
+        self._prompt_expand_btn.setToolTip("Expand prompt instructions view")
+        self._prompt_expand_btn.clicked.connect(self._on_expand_prompt)
+        vt.addWidget(self._prompt_expand_btn)
+        rl.addLayout(vt)
 
         sub = QLabel("Define how selected text should be transformed:"); sub.setObjectName("SubLabel")
         sub.setWordWrap(True); rl.addWidget(sub)
@@ -441,10 +600,15 @@ class EditTagPage(QWidget):
         self._stack = QStackedWidget()
         self._prompt_edit = QTextEdit()
         self._prompt_edit.setPlaceholderText("Describe the desired style, tone and format… (Markdown supported)")
+        self._prompt_edit.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._prompt_edit.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._prompt_edit.textChanged.connect(self._sync_preview)
+        self._prompt_edit.textChanged.connect(self._check_dirty)
         self._stack.addWidget(self._prompt_edit)
         self._preview = QTextEdit(); self._preview.setReadOnly(True)
         self._preview.setPlaceholderText("Markdown preview…")
+        self._preview.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._preview.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._stack.addWidget(self._preview)
         rl.addWidget(self._stack, 1)
 
@@ -455,12 +619,30 @@ class EditTagPage(QWidget):
         br.addStretch(1)
         self._save_btn = QPushButton("Save Tag"); self._save_btn.setObjectName("Primary")
         self._save_btn.setFixedHeight(38); self._save_btn.setMinimumWidth(110)
+        self._save_btn.setEnabled(False)
         self._save_btn.clicked.connect(self._on_save); br.addWidget(self._save_btn)
         rl.addLayout(br)
         layout.addWidget(right_card, 1)
 
         self._list.currentTextChanged.connect(self._on_select)
         self.reload()
+
+    def _on_expand_prompt(self) -> None:
+        overlay = ExpandOverlay(
+            target_edit=self._prompt_edit,
+            parent_container=self.window(),
+            title_text="Instructions  •  Expanded View",
+            start_widget=self._prompt_edit,
+        )
+        overlay.animate_expand()
+
+    def _check_dirty(self) -> None:
+        curr_n = self._name_edit.text().strip()
+        curr_p = self._prompt_edit.toPlainText().strip()
+        orig_n = (self._saved_name or "").strip()
+        orig_p = (self._saved_prompt or "").strip()
+        dirty = (curr_n != orig_n) or (curr_p != orig_p)
+        self._save_btn.setEnabled(dirty and bool(curr_n) and bool(curr_p))
 
     def _show_raw(self):
         self._raw_btn.setChecked(True); self._md_btn.setChecked(False); self._stack.setCurrentIndex(0)
@@ -492,15 +674,31 @@ class EditTagPage(QWidget):
         if not it: return
         n = it.data(Qt.UserRole)
         if not n: return
-        self._current_name = n; self._name_edit.setText(n)
+        self._current_name = n
+        self._name_edit.blockSignals(True)
+        self._prompt_edit.blockSignals(True)
+        self._name_edit.setText(n)
         p = self._store.prompt_for(n)
         self._prompt_edit.setPlainText(p); self._preview.setMarkdown(p)
+        self._saved_name = n
+        self._saved_prompt = p
+        self._name_edit.blockSignals(False)
+        self._prompt_edit.blockSignals(False)
+        self._save_btn.setEnabled(False)
         self._del_btn.setEnabled(True)
 
     def _on_new(self):
         self._list.clearSelection(); self._list.setCurrentRow(-1)
-        self._current_name = None; self._name_edit.clear()
+        self._current_name = None
+        self._name_edit.blockSignals(True)
+        self._prompt_edit.blockSignals(True)
+        self._name_edit.clear()
         self._prompt_edit.clear(); self._preview.clear()
+        self._saved_name = ""
+        self._saved_prompt = ""
+        self._name_edit.blockSignals(False)
+        self._prompt_edit.blockSignals(False)
+        self._save_btn.setEnabled(False)
         self._show_raw(); self._del_btn.setEnabled(False); self._name_edit.setFocus()
 
     def _on_save(self):
@@ -514,6 +712,9 @@ class EditTagPage(QWidget):
             self._store.rename(self._current_name, name, prompt)
         else:
             self._store.set_tag(name, prompt)
+        self._saved_name = name
+        self._saved_prompt = prompt
+        self._save_btn.setEnabled(False)
         self.reload(select=name); self.tags_changed.emit()
 
     def _on_delete(self):
@@ -683,11 +884,6 @@ class ProfileCardWidget(QFrame):
         if is_active:
             badge = QLabel("Active Space"); badge.setObjectName("ActiveBadge")
             hdr.addWidget(badge)
-        else:
-            sa = QPushButton("Set Active"); sa.setObjectName("MiniAction")
-            sa.setIcon(_svg_icon("check", "#1b5e20", 13)); sa.setIconSize(QSize(13, 13))
-            sa.clicked.connect(lambda: self.active_space_requested.emit(self._space_name))
-            hdr.addWidget(sa)
 
         hdr.addStretch(1)
 
@@ -1101,7 +1297,7 @@ class ProfileCardWidget(QFrame):
                     "QFrame{background:rgba(253,216,216,0.90);border:none;border-radius:13px;}")
 
         # Slide open the result label
-        res_lbl = self._model_result_labels.get(mid or "")
+        res_lbl = self._model_result_labels.get(model_id)
         if res_lbl:
             if success:
                 res_lbl.setStyleSheet("color: #1b5e20; font-weight: 700; border: none; background: transparent;")
@@ -1109,10 +1305,10 @@ class ProfileCardWidget(QFrame):
             else:
                 res_lbl.setStyleSheet("color: #c0392b; font-weight: 700; border: none; background: transparent;")
                 res_lbl.setText(f"✗  {message}")
-            self._animate_result_label(mid or "", True)
+            self._animate_result_label(model_id, True)
 
             # Schedule auto-collapse after 3 seconds
-            QTimer.singleShot(3000, lambda m=mid: self._collapse_result(m))
+            QTimer.singleShot(3000, lambda m=model_id: self._collapse_result(m))
 
     def _collapse_result(self, model_id: str | None) -> None:
         """Animate the result label closed and restore row color."""
@@ -1184,9 +1380,26 @@ class NewProfileCardWidget(QFrame):
         cancel.setFixedHeight(34); cancel.clicked.connect(self._collapse); br.addWidget(cancel)
         br.addStretch(1)
         create = QPushButton("Create Profile"); create.setObjectName("Primary")
-        create.setStyleSheet("color: #000000; font-weight: bold;")
+        create.setStyleSheet("""
+            QPushButton {
+                background-color: #2e7d32;
+                color: #000000;
+                font-weight: 700;
+                font-family: 'Comfortaa';
+                font-size: 13px;
+                border: 2px solid #0a0a0a;
+                border-radius: 17px;
+                padding: 4px 18px;
+            }
+            QPushButton:hover {
+                background-color: #388e3c;
+            }
+            QPushButton:pressed {
+                background-color: #1b5e20;
+                color: #ffffff;
+            }
+        """)
         create.setFixedHeight(34)
-        create.setIcon(_svg_icon("add_profile", "#000000", 14)); create.setIconSize(QSize(14, 14))
         create.clicked.connect(self._create); br.addWidget(create)
         fl.addLayout(br)
 
@@ -1416,23 +1629,31 @@ class BallWidget(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(None, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
-        self.setFixedSize(QSize(62, 62))
+        self.setFixedSize(QSize(54, 54))
         self._drag_pos: QPoint | None = None
         self._press_pos: QPoint | None = None
         self._dragging = False
+
+        pencil_path = Path(__file__).resolve().parent.parent.parent / "assets" / "pencil.png"
+        if pencil_path.exists():
+            self._pixmap = QPixmap(str(pencil_path))
+        else:
+            self._pixmap = None
 
     def show_at(self, pos: QPoint) -> None:
         self.move(pos); self.show(); self.raise_()
 
     def paintEvent(self, event) -> None:
-        p = QPainter(self); p.setRenderHint(QPainter.Antialiasing)
-        rect = self.rect().adjusted(3, 3, -3, -3)
-        p.setBrush(QBrush(QColor("#1b5e20")))
-        p.setPen(QPen(QColor("#0a0a0a"), 2.5))
-        p.drawEllipse(rect)
-        p.setPen(QPen(QColor("#ffffff")))
-        f = QFont("Comfortaa", 18); f.setBold(True); p.setFont(f)
-        p.drawText(rect, Qt.AlignCenter, "P")   # P for Pencil, no emoji
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setRenderHint(QPainter.SmoothPixmapTransform)
+        if self._pixmap and not self._pixmap.isNull():
+            p.drawPixmap(self.rect(), self._pixmap)
+        else:
+            rect = self.rect().adjusted(3, 3, -3, -3)
+            p.setBrush(QBrush(QColor("#1b5e20")))
+            p.setPen(QPen(QColor("#0a0a0a"), 2.5))
+            p.drawEllipse(rect)
         p.end()
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
@@ -1466,6 +1687,7 @@ class BallWidget(QWidget):
 class SettingsWindow(QDialog):
     tags_changed = Signal()
     minimize_requested = Signal()
+    return_requested = Signal()
 
     PAGES = [("Edit Tags", "Edit Tag"), ("General", "General"),
              ("AI Model", "AI Model"), ("About", "About")]
@@ -1514,6 +1736,16 @@ class SettingsWindow(QDialog):
         self._title = QLabel("Better It  •  Settings"); self._title.setObjectName("SettingsTitle")
         hdr.addWidget(self._title); hdr.addStretch(1)
 
+        self._return_btn = QPushButton()
+        self._return_btn.setObjectName("MinimizeButton")
+        self._return_btn.setFixedSize(30, 30)
+        self._return_btn.setIcon(_svg_icon("return", "#1b5e20", 16))
+        self._return_btn.setIconSize(QSize(16, 16))
+        self._return_btn.setToolTip("Return to Better It")
+        self._return_btn.clicked.connect(self._on_return_clicked)
+        self._return_btn.hide()
+        hdr.addWidget(self._return_btn)
+
         self._min_btn = QPushButton("–"); self._min_btn.setObjectName("MinimizeButton")
         self._min_btn.setFixedSize(30, 30); self._min_btn.setToolTip("Minimize to ball")
         self._min_btn.clicked.connect(self._on_minimize); hdr.addWidget(self._min_btn)
@@ -1524,8 +1756,8 @@ class SettingsWindow(QDialog):
 
         body = QHBoxLayout(); body.setSpacing(14)
         self._sidebar = QListWidget(); self._sidebar.setObjectName("Sidebar")
-        self._sidebar.setFixedWidth(160)
-        sidebar_font = QFont("Playwrite US Modern", 11, QFont.Bold)
+        self._sidebar.setFixedWidth(135)
+        sidebar_font = QFont("Playwrite US Modern", 10, QFont.Bold)
         sidebar_font.setFamilies(["Playwrite US Modern", "Playwrite US Trad", "Playwrite US", "Playwrite", "Comfortaa", "sans-serif"])
         self._sidebar.setFont(sidebar_font)
         for label, _ in self.PAGES:
@@ -1553,6 +1785,13 @@ class SettingsWindow(QDialog):
         self._stack.setCurrentIndex(idx)
         if idx == 1: self._general_page.refresh()
         elif idx == 2: self._ai_page.reload()
+
+    def set_return_visible(self, visible: bool) -> None:
+        self._return_btn.setVisible(visible)
+
+    def _on_return_clicked(self) -> None:
+        self.hide()
+        self.return_requested.emit()
 
     def _on_tags(self) -> None:
         self._general_page.refresh(); self.tags_changed.emit()

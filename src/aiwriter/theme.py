@@ -222,19 +222,19 @@ QFrame#AboutHeroCard {
 QListWidget#Sidebar {
     background-color: rgba(226, 244, 226, 0.92);
     border: 2.5px solid #0a0a0a;
-    border-radius: 22px;
-    padding: 8px;
+    border-radius: 18px;
+    padding: 6px;
     font-family: 'Playwrite US Modern', 'Playwrite US Trad', 'Playwrite US', 'Playwrite', 'Comfortaa', sans-serif;
     outline: none;
 }
 
 QListWidget#Sidebar::item {
     color: #1a5a1a;
-    padding: 12px 14px;
-    border-radius: 14px;
-    font-size: 13px;
+    padding: 8px 10px;
+    border-radius: 12px;
+    font-size: 11px;
     font-weight: 700;
-    margin-bottom: 6px;
+    margin-bottom: 4px;
     border: 1.5px solid transparent;
     font-family: 'Playwrite US Modern', 'Playwrite US Trad', 'Playwrite US', 'Playwrite', 'Comfortaa', sans-serif;
 }
@@ -252,21 +252,26 @@ QListWidget#Sidebar::item:selected {
 
 /* === Tag List === */
 QListWidget#TagList {
-    background-color: rgba(255, 255, 255, 0.92);
-    border: 2px solid #0a0a0a;
-    border-radius: 18px;
-    padding: 6px;
+    background-color: transparent;
+    border: none;
+    padding: 2px;
     font-family: 'Comfortaa';
     outline: none;
 }
 
+QListWidget#TagList QScrollBar:vertical {
+    width: 0px;
+    height: 0px;
+    background: transparent;
+}
+
 QListWidget#TagList::item {
     color: #0a2e0a;
-    padding: 10px 12px;
+    padding: 12px 14px;
     border-radius: 12px;
     font-size: 13px;
     font-weight: 600;
-    margin-bottom: 4px;
+    margin-bottom: 6px;
     border: 1.5px solid transparent;
 }
 
@@ -647,41 +652,53 @@ QPushButton#ViewToggle:checked {
 
 /* === Scrollbars === */
 QScrollBar:vertical {
-    background: rgba(200, 230, 200, 0.3);
-    width: 8px;
-    border-radius: 4px;
-    margin: 2px;
+    background: transparent;
+    width: 6px;
+    margin: 0px;
+    border: none;
 }
 
 QScrollBar::handle:vertical {
-    background: #2e7d32;
-    border-radius: 4px;
-    min-height: 24px;
+    background: #1b5e20;
+    border-radius: 3px;
+    min-height: 16px;
 }
 
 QScrollBar::handle:vertical:hover {
-    background: #1b5e20;
+    background: #2e7d32;
 }
 
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
     height: 0px;
+    background: none;
+    border: none;
+}
+
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+    background: none;
 }
 
 QScrollBar:horizontal {
-    background: rgba(200, 230, 200, 0.3);
-    height: 8px;
-    border-radius: 4px;
-    margin: 2px;
+    background: transparent;
+    height: 6px;
+    margin: 0px;
+    border: none;
 }
 
 QScrollBar::handle:horizontal {
-    background: #2e7d32;
-    border-radius: 4px;
-    min-width: 24px;
+    background: #1b5e20;
+    border-radius: 3px;
+    min-width: 16px;
 }
 
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
     width: 0px;
+    background: none;
+    border: none;
+}
+
+QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
+    background: none;
 }
 
 /* === Scroll Area === */

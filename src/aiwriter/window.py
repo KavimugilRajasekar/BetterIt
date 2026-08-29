@@ -14,12 +14,15 @@ from __future__ import annotations
 
 import sys
 
+from pathlib import Path
+
 from PySide6.QtCore import QPoint, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QBitmap,
     QBrush,
     QColor,
     QFontDatabase,
+    QIcon,
     QMouseEvent,
     QPainter,
     QPainterPath,
@@ -44,13 +47,13 @@ from PySide6.QtWidgets import (
 try:
     # Normal case: window.py lives inside a package (e.g. aiwriter/window.py)
     # alongside settings.py, tag_store.py, and theme.py.
-    from .settings import SettingsWindow
+    from .settings import SettingsWindow, ExpandOverlay, _svg_icon
     from .tag_store import TagStore
     from .theme import STYLESHEET
 except ImportError:
     # Fallback: window.py is being run/imported as a standalone script with
     # settings.py, tag_store.py, theme.py sitting next to it (no package).
-    from settings import SettingsWindow
+    from settings import SettingsWindow, ExpandOverlay, _svg_icon
     from tag_store import TagStore
     from theme import STYLESHEET
 
@@ -186,6 +189,24 @@ class MarqueeComboBox(QComboBox):
         painter.restore()
 
 
+class HoverIconButton(QPushButton):
+    def __init__(self, normal_icon: QIcon, hover_icon: QIcon, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._normal_icon = normal_icon
+        self._hover_icon = hover_icon
+        self.setIcon(self._normal_icon)
+
+    def enterEvent(self, event) -> None:
+        if not self._hover_icon.isNull():
+            self.setIcon(self._hover_icon)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        if not self._normal_icon.isNull():
+            self.setIcon(self._normal_icon)
+        super().leaveEvent(event)
+
+
 # --- Main window ------------------------------------------------------------
 
 class FloatingWindow(QWidget):
@@ -259,20 +280,69 @@ class FloatingWindow(QWidget):
         self._title.mouseMoveEvent = self._mouse_move_event
         title_row.addWidget(self._title)
         title_row.addStretch(1)
+
+        # Settings button (assets/settings_grey.png default, assets/settings.png on hover, no outer border, positioned just left of 'x')
+        assets_dir = Path(__file__).resolve().parent.parent.parent / "assets"
+        grey_path = assets_dir / "settings_grey.png"
+        color_path = assets_dir / "settings.png"
+
+        normal_icon = QIcon(str(grey_path)) if grey_path.exists() else QIcon()
+        hover_icon = QIcon(str(color_path)) if color_path.exists() else normal_icon
+
+        self._settings_btn = HoverIconButton(normal_icon, hover_icon)
+        self._settings_btn.setObjectName("HeaderSettingsBtn")
+        self._settings_btn.setToolTip("Manage tags & settings")
+        self._settings_btn.setFixedSize(28, 28)
+        self._settings_btn.setIconSize(QSize(22, 22))
+        self._settings_btn.setFlat(True)
+        self._settings_btn.setStyleSheet("""
+            QPushButton#HeaderSettingsBtn {
+                background: transparent;
+                border: none;
+                outline: none;
+                padding: 0px;
+            }
+            QPushButton#HeaderSettingsBtn:hover {
+                background: transparent;
+                border: none;
+            }
+            QPushButton#HeaderSettingsBtn:pressed {
+                background: transparent;
+                border: none;
+            }
+        """)
+        title_row.addWidget(self._settings_btn)
+
         self._close_btn = QPushButton("✕")
         self._close_btn.setObjectName("CloseButton")
         self._close_btn.setFixedSize(30, 30)
         title_row.addWidget(self._close_btn)
         root.addLayout(title_row)
 
-        # Original pane
-        root.addWidget(self._make_pane_label("Original"))
+        # Original pane header
+        orig_hdr = QHBoxLayout()
+        self._original_label = self._make_pane_label("Original")
+        orig_hdr.addWidget(self._original_label)
+        orig_hdr.addStretch(1)
+
+        norm_exp = _svg_icon("expand", "#1b5e20", 15)
+        hov_exp = _svg_icon("expand", "#000000", 15)
+        self._orig_expand_btn = HoverIconButton(norm_exp, hov_exp)
+        self._orig_expand_btn.setFixedSize(24, 24)
+        self._orig_expand_btn.setToolTip("Expand original text view")
+        self._orig_expand_btn.setStyleSheet("background: transparent; border: none;")
+        self._orig_expand_btn.clicked.connect(self._on_expand_original)
+        orig_hdr.addWidget(self._orig_expand_btn)
+        root.addLayout(orig_hdr)
+
         self._original = QTextEdit()
         self._original.setReadOnly(True)
         self._original.setFixedHeight(80)
+        self._original.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._original.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         root.addWidget(self._original)
 
-        # -- Single control row: Tag selector + "+" + status + Polish --------
+        # -- Single control row: Tag selector + status + Polish ----------------
         control_row = QHBoxLayout()
         control_row.setSpacing(8)
 
@@ -295,24 +365,14 @@ class FloatingWindow(QWidget):
         self._tag_stack.addWidget(self._tag_thinking_label)  # index 1: loading
         control_row.addWidget(self._tag_stack)
 
-        # "+" button: swaps for a spinner while polishing.
-        self._plus_stack = QStackedWidget()
-        self._plus_stack.setFixedSize(40, 40)
-
-        self._new_tag_btn = QPushButton("+")
-        self._new_tag_btn.setObjectName("IconButton")
-        self._new_tag_btn.setToolTip("Manage tags")
-
         spinner_wrap = QWidget()
         spinner_layout = QVBoxLayout(spinner_wrap)
         spinner_layout.setContentsMargins(0, 0, 0, 0)
         spinner_layout.setAlignment(Qt.AlignCenter)
         self._plus_spinner = Spinner(size=20)
         spinner_layout.addWidget(self._plus_spinner)
-
-        self._plus_stack.addWidget(self._new_tag_btn)  # index 0: idle
-        self._plus_stack.addWidget(spinner_wrap)        # index 1: loading
-        control_row.addWidget(self._plus_stack)
+        self._plus_spinner.hide()
+        control_row.addWidget(spinner_wrap)
 
         self._status_label = QLabel("")
         self._status_label.setStyleSheet(
@@ -328,18 +388,38 @@ class FloatingWindow(QWidget):
 
         root.addLayout(control_row)
 
-        # Improved pane
-        root.addWidget(self._make_pane_label("Improved"))
+        # Improved pane header
+        imp_hdr = QHBoxLayout()
+        imp_hdr.addWidget(self._make_pane_label("Improved"))
+        imp_hdr.addStretch(1)
+
+        self._imp_expand_btn = HoverIconButton(norm_exp, hov_exp)
+        self._imp_expand_btn.setFixedSize(24, 24)
+        self._imp_expand_btn.setToolTip("Expand improved text view")
+        self._imp_expand_btn.setStyleSheet("background: transparent; border: none;")
+        self._imp_expand_btn.clicked.connect(self._on_expand_improved)
+        imp_hdr.addWidget(self._imp_expand_btn)
+        root.addLayout(imp_hdr)
+
         self._improved = QTextEdit()
         self._improved.setObjectName("ImprovedPane")
         self._improved.setReadOnly(True)
         self._improved.setFixedHeight(120)
+        self._improved.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._improved.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         root.addWidget(self._improved)
 
-        # Replace & Copy row
+        # Edit, Copy & Replace row
         replace_row = QHBoxLayout()
         replace_row.setSpacing(10)
         replace_row.addStretch(1)
+
+        self._edit_btn = QPushButton("Edit")
+        self._edit_btn.setObjectName("Secondary")
+        self._edit_btn.setEnabled(False)
+        self._edit_btn.setFixedHeight(40)
+        self._edit_btn.setMinimumWidth(85)
+        replace_row.addWidget(self._edit_btn)
 
         self._copy_btn = QPushButton("Copy")
         self._copy_btn.setObjectName("Secondary")
@@ -363,10 +443,11 @@ class FloatingWindow(QWidget):
 
     def _wire_signals(self) -> None:
         self._close_btn.clicked.connect(self.hide_window)
+        self._settings_btn.clicked.connect(self._on_open_settings_clicked)
         self._correct_btn.clicked.connect(self._on_correct_clicked)
+        self._edit_btn.clicked.connect(self._on_edit_clicked)
         self._copy_btn.clicked.connect(self._on_copy_clicked)
         self._replace_btn.clicked.connect(self._on_replace_clicked)
-        self._new_tag_btn.clicked.connect(self._on_open_settings_clicked)
 
     # -- Tag management -------------------------------------------------
 
@@ -388,10 +469,14 @@ class FloatingWindow(QWidget):
         if self._settings_window is None:
             self._settings_window = SettingsWindow(self._tag_store, initial_page=page)
             self._settings_window.tags_changed.connect(self._on_tags_changed_externally)
+            self._settings_window.return_requested.connect(self._on_return_from_settings)
             # When settings fully closes (not just minimized), restore the BetterIt window
             self._settings_window.finished.connect(self._on_settings_closed)
         else:
             self._settings_window.open_page(page)
+
+        # Show Return button because Settings was opened from BetterIt window
+        self._settings_window.set_return_visible(True)
 
         # Mutual exclusion: hide the BetterIt window while Settings is up
         self.hide()
@@ -407,6 +492,12 @@ class FloatingWindow(QWidget):
         self._settings_window.raise_()
         self._settings_window.activateWindow()
 
+    def _on_return_from_settings(self) -> None:
+        """Called when user clicks Return in Settings to go back to BetterIt."""
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
     def _on_settings_closed(self) -> None:
         """Called when the Settings dialog is fully closed (not minimized)."""
         # Don't auto-show; user will trigger via hotkey or tray again.
@@ -418,10 +509,13 @@ class FloatingWindow(QWidget):
         if self._settings_window is not None and self._settings_window.isVisible():
             self._settings_window.hide()
 
+        self._original_label.setText("Original")
+        self._original.setReadOnly(True)
         self._original.setPlainText(text)
         self._improved.clear()
         self._improved.setProperty("state", "")
         self._status_label.setText("")
+        self._edit_btn.setEnabled(False)
         self._copy_btn.setEnabled(False)
         self._copy_btn.setText("Copy")
         self._replace_btn.setEnabled(False)
@@ -482,10 +576,10 @@ class FloatingWindow(QWidget):
 
 
     def show_loading(self) -> None:
-        """Switch to loading state: tag box greyed + 'Thinking…', '+' becomes
-        a spinner, Polish button disabled."""
+        """Switch to loading state: tag box greyed + 'Thinking…', Polish button disabled."""
         self._correct_btn.setEnabled(False)
         self._correct_btn.setText("Polishing…")
+        self._edit_btn.setEnabled(False)
         self._copy_btn.setEnabled(False)
         self._replace_btn.setEnabled(False)
         self._status_label.setText("")
@@ -493,16 +587,17 @@ class FloatingWindow(QWidget):
         self._tag_combo.setEnabled(False)
         self._tag_stack.setCurrentWidget(self._tag_thinking_label)
 
-        self._new_tag_btn.setEnabled(False)
-        self._plus_stack.setCurrentIndex(1)
+        self._settings_btn.setEnabled(False)
+        self._plus_spinner.show()
         self._plus_spinner.start()
 
     def show_improved(self, corrected: str) -> None:
-        """Switch to result state: improved text shown, Replace and Copy enabled."""
+        """Switch to result state: improved text shown, Edit, Copy and Replace enabled."""
         self._end_loading_visuals()
         self._status_label.setText("done")
         self._improved.setProperty("state", "")
         self._improved.setPlainText(corrected)
+        self._edit_btn.setEnabled(True)
         self._copy_btn.setEnabled(True)
         self._copy_btn.setText("Copy")
         self._replace_btn.setEnabled(True)
@@ -514,14 +609,15 @@ class FloatingWindow(QWidget):
         self._status_label.setText("error")
         self._improved.setProperty("state", "error")
         self._improved.setPlainText(message)
+        self._edit_btn.setEnabled(False)
         self._copy_btn.setEnabled(False)
         self._replace_btn.setEnabled(False)
         self._correct_btn.setEnabled(True)
 
     def _end_loading_visuals(self) -> None:
         self._plus_spinner.stop()
-        self._plus_stack.setCurrentIndex(0)
-        self._new_tag_btn.setEnabled(True)
+        self._plus_spinner.hide()
+        self._settings_btn.setEnabled(True)
 
         self._tag_stack.setCurrentWidget(self._tag_combo)
         self._tag_combo.setEnabled(True)
@@ -536,17 +632,48 @@ class FloatingWindow(QWidget):
         self.closed.emit()
 
     def _reset_to_idle(self) -> None:
+        self._original_label.setText("Original")
+        self._original.setReadOnly(True)
         self._original.clear()
         self._improved.clear()
         self._improved.setProperty("state", "")
         self._status_label.setText("")
         self._correct_btn.setEnabled(True)
+        self._edit_btn.setEnabled(False)
         self._copy_btn.setEnabled(False)
         self._copy_btn.setText("Copy")
         self._replace_btn.setEnabled(False)
         self._end_loading_visuals()
 
     # -- Internal slots -----------------------------------------------------
+
+    def _on_expand_original(self) -> None:
+        title = self._original_label.text()
+        overlay = ExpandOverlay(
+            target_edit=self._original,
+            parent_container=self._container,
+            title_text=f"{title} Text  •  Expanded View",
+            start_widget=self._original,
+        )
+        overlay.animate_expand()
+
+    def _on_expand_improved(self) -> None:
+        overlay = ExpandOverlay(
+            target_edit=self._improved,
+            parent_container=self._container,
+            title_text="Improved Text  •  Expanded View",
+            start_widget=self._improved,
+        )
+        overlay.animate_expand()
+
+    def _on_edit_clicked(self) -> None:
+        text = self._improved.toPlainText()
+        if not text:
+            return
+        self._original.setReadOnly(False)
+        self._original.setPlainText(text)
+        self._original_label.setText("EDITING")
+        self._original.setFocus()
 
     def _on_correct_clicked(self) -> None:
         text = self._original.toPlainText().strip()
