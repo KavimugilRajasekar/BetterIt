@@ -494,6 +494,11 @@ class FloatingWindow(QWidget):
         self._settings_window.raise_()
         self._settings_window.activateWindow()
 
+    def set_settings_ball_loading(self, loading: bool, error: str | None = None) -> None:
+        """Proxy loading state to the settings window's ball widget."""
+        if self._settings_window:
+            self._settings_window.set_ball_loading(loading, error=error)
+
     def _on_return_from_settings(self) -> None:
         """Called when user clicks Return in Settings to go back to BetterIt."""
         self.show()

@@ -829,6 +829,9 @@ class EditTagPage(QWidget):
 class GeneralSettingsPage(QWidget):
     tags_changed = Signal()
 
+class GeneralSettingsPage(QWidget):
+    tags_changed = Signal()
+
     def __init__(self, tag_store: TagStore, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._store = tag_store
@@ -847,36 +850,27 @@ class GeneralSettingsPage(QWidget):
         self._default_combo.currentTextChanged.connect(lambda tx: self._store.set_config("default_tag", tx) if tx else None)
         dr.addWidget(self._default_combo, 1); cl.addLayout(dr)
 
-        self._top_check = QCheckBox("Keep the floating window always on top")
-        self._top_check.setChecked(bool(self._store.get_config("always_on_top", True)))
-        self._top_check.toggled.connect(lambda v: self._store.set_config("always_on_top", v))
-        cl.addWidget(self._top_check)
-
-        # Quick Replace option
-        qr_frame = QFrame(); qr_frame.setObjectName("InnerCard")
-        qrl = QVBoxLayout(qr_frame); qrl.setContentsMargins(14, 12, 14, 12); qrl.setSpacing(8)
-
-        qr_header = QHBoxLayout()
-        qr_header.addWidget(QLabel("Quick Replace", objectName="SectionLabel"))
-        self._quick_replace_check = QCheckBox("Enable")
-        self._quick_replace_check.setChecked(bool(self._store.get_config("quick_replace", False)))
-        self._quick_replace_check.toggled.connect(lambda v: self._store.set_config("quick_replace", v))
-        qr_header.addStretch(1)
-        qr_header.addWidget(self._quick_replace_check)
-        qrl.addLayout(qr_header)
-
-        hv = os.environ.get("HOTKEY", "Ctrl + Space")
-        qr_desc = QLabel(
-            f"When enabled, select any text and press <b>{hv}</b> — "
-            "BetterIt will silently polish it and instantly replace the selection in-place, "
-            "without opening any window."
+        # --- Toggle Options (using the AI Model style) ---
+        # Always on Top
+        self._top_toggle = self._create_toggle_option(
+            label="Keep the floating window always on top",
+            config_key="always_on_top",
+            default=True,
+            description="Ensures the BetterIt window stays above all other applications, so you don't have to keep refocusing it."
         )
-        qr_desc.setObjectName("SubLabel"); qr_desc.setWordWrap(True)
-        qrl.addWidget(qr_desc)
-        cl.addWidget(qr_frame)
+        cl.addWidget(self._top_toggle)
 
-        hk = QFrame(); hk.setObjectName("InnerCard")
-        hkl = QVBoxLayout(hk); hkl.setContentsMargins(14, 12, 14, 12); hkl.setSpacing(6)
+        # Quick Replace
+        self._qr_toggle = self._create_toggle_option(
+            label="Quick Replace",
+            config_key="quick_replace",
+            default=False,
+            description="When enabled, select any text and press Ctrl+Space — BetterIt will silently polish it and instantly replace the selection in-place, without opening any window."
+        )
+        cl.addWidget(self._qr_toggle)
+
+        hk = QWidget()
+        hkl = QVBoxLayout(hk); hkl.setContentsMargins(0, 12, 0, 12); hkl.setSpacing(6)
         hkl.addWidget(QLabel("Global Trigger Shortcut", objectName="SectionLabel"))
         hv = os.environ.get("HOTKEY", "Ctrl + Space")
         hd = QLabel(f"Select text and press <b>{hv}</b> to open BetterIt.<br>"
@@ -889,6 +883,47 @@ class GeneralSettingsPage(QWidget):
         rb.setFixedHeight(36); rb.clicked.connect(self._on_reset); rr.addWidget(rb)
         cl.addLayout(rr); layout.addWidget(card)
         self.refresh()
+
+    def _create_toggle_option(self, label: str, config_key: str, default: bool, description: str) -> QWidget:
+        """Creates a toggle option with an active/inactive icon, removing the boxed border."""
+        frame = QWidget()
+        layout = QVBoxLayout(frame); layout.setContentsMargins(0, 4, 0, 12); layout.setSpacing(6)
+
+        trigger_row = QHBoxLayout(); trigger_row.setSpacing(10)
+
+        # Active/Inactive button
+        current_val = bool(self._store.get_config(config_key, default))
+        btn = QPushButton()
+        btn.setFixedSize(26, 26)
+        btn.setFlat(True)
+        btn.setCursor(Qt.PointingHandCursor)
+        btn.setIcon(_get_active_icon(current_val, 20))
+        btn.setIconSize(QSize(20, 20))
+        btn.setStyleSheet("QPushButton { background: transparent; border: none; }")
+
+        # Option label
+        lbl = QLabel(label); lbl.setObjectName("SectionLabel")
+        lbl.setStyleSheet("color: #0a2e0a; font-size: 13px; font-weight: 700; text-transform: none; letter-spacing: 0px;")
+
+        trigger_row.addWidget(btn)
+        trigger_row.addWidget(lbl)
+        trigger_row.addStretch(1)
+
+        # Description label - plain text, no box
+        desc = QLabel(description); desc.setObjectName("SubLabel")
+        desc.setWordWrap(True)
+        # Removed setContentsMargins to prevent text from being cut off or misaligned
+
+        layout.addLayout(trigger_row)
+        layout.addWidget(desc)
+
+        def toggle():
+            new_val = not bool(self._store.get_config(config_key, default))
+            self._store.set_config(config_key, new_val)
+            btn.setIcon(_get_active_icon(new_val, 20))
+
+        btn.clicked.connect(toggle)
+        return frame
 
     def refresh(self) -> None:
         saved = self._store.get_config("default_tag", "Grammar & Clarity")
@@ -1737,41 +1772,131 @@ class AboutPage(QWidget):
 
 
 # ---------------------------------------------------------------------------
-# BallWidget (minimised floating ball)
+# Quick Replace Loading Components
 # ---------------------------------------------------------------------------
 
-class BallWidget(QWidget):
+class PencilLoaderWidget(QWidget):
+    """
+    A specialized widget that shows a pencil icon with an optional rotating
+    loading border and an expandable error state.
+    """
+    IDLE = 0
+    LOADING = 1
+    ERROR = 2
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setFixedSize(QSize(54, 54))
+
+        self._state = self.IDLE
+        self._error_msg: str | None = None
+        self._angle = 0
+
+        # Loading timer
+        self._timer = QTimer(self)
+        self._timer.setInterval(50)
+        self._timer.timeout.connect(self._advance_angle)
+
+        # Load pencil image
+        pencil_path = Path(__file__).resolve().parent.parent.parent / "assets" / "pencil.png"
+        if pencil_path.exists():
+            self._pencil_pixmap = QPixmap(str(pencil_path)).scaled(
+                QSize(30, 30), Qt.KeepAspectRatio, Qt.SmoothTransformation
+            )
+        else:
+            self._pencil_pixmap = None
+
+    def _advance_angle(self) -> None:
+        self._angle = (self._angle + 12) % 360
+        self.update()
+
+    def set_loading(self, loading: bool) -> None:
+        if loading:
+            self._state = self.LOADING
+            self._timer.start()
+        else:
+            self._state = self.IDLE
+            self._timer.stop()
+        self.update()
+
+    def set_error(self, message: str | None) -> None:
+        if message:
+            self._state = self.ERROR
+            self._error_msg = message
+            # Expand to fit text (pill shape)
+            self.setFixedSize(QSize(240, 54))
+        else:
+            self._state = self.IDLE
+            self._error_msg = None
+            self.setFixedSize(QSize(54, 54))
+        self._timer.stop()
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform)
+
+        if self._state == self.ERROR:
+            # Draw Pill Shape
+            rect = self.rect().adjusted(2, 2, -2, -2)
+            painter.setBrush(QBrush(QColor("#1a1a1a")))
+            painter.setPen(QPen(QColor("#444444"), 1.5))
+            painter.drawRoundedRect(rect, 25, 25)
+
+            # Draw Error Text
+            if self._error_msg:
+                text_rect = rect.adjusted(50, 0, -10, 0)
+                painter.setPen(QPen(QColor("#ffffff")))
+                font = painter.font()
+                font.setFamily("Comfortaa")
+                font.setPixelSize(12)
+                painter.setFont(font)
+                painter.drawText(text_rect, Qt.AlignVCenter | Qt.AlignLeft, self._error_msg)
+
+            # Draw small pencil icon on the left
+            if self._pencil_pixmap:
+                px = 12
+                py = (self.height() - self._pencil_pixmap.height()) // 2
+                painter.drawPixmap(px, py, self._pencil_pixmap)
+
+        else:
+            # Circular state (IDLE or LOADING)
+            # Draw the pencil first
+            if self._pencil_pixmap:
+                px = (self.width() - self._pencil_pixmap.width()) // 2
+                py = (self.height() - self._pencil_pixmap.height()) // 2
+                painter.drawPixmap(px, py, self._pencil_pixmap)
+
+            # Draw the loading border
+            if self._state == self.LOADING:
+                pen_track = QPen(QColor("#a8d5a8"), 3)
+                painter.setPen(pen_track)
+                painter.drawEllipse(4, 4, self.width() - 8, self.height() - 8)
+
+                pen_arc = QPen(QColor("#1b5e20"), 4)
+                painter.setPen(pen_arc)
+                start = self._angle * 16
+                span = 280 * 16 # Approx 280 degrees
+                painter.drawArc(4, 4, self.width() - 8, self.height() - 8, start, span)
+
+        painter.end()
+
+# ---------------------------------------------------------------------------
+# BallWidget (minimised floating ball)
+# ---------------------------------------------------------------------------
+class BallWidget(PencilLoaderWidget):
     expand_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(None, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
-        self.setAttribute(Qt.WA_TranslucentBackground)
-        self.setFixedSize(QSize(54, 54))
+        super().__init__(parent)
         self._drag_pos: QPoint | None = None
         self._press_pos: QPoint | None = None
         self._dragging = False
 
-        pencil_path = Path(__file__).resolve().parent.parent.parent / "assets" / "pencil.png"
-        if pencil_path.exists():
-            self._pixmap = QPixmap(str(pencil_path))
-        else:
-            self._pixmap = None
-
     def show_at(self, pos: QPoint) -> None:
         self.move(pos); self.show(); self.raise_()
-
-    def paintEvent(self, event) -> None:
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
-        p.setRenderHint(QPainter.SmoothPixmapTransform)
-        if self._pixmap and not self._pixmap.isNull():
-            p.drawPixmap(self.rect(), self._pixmap)
-        else:
-            rect = self.rect().adjusted(3, 3, -3, -3)
-            p.setBrush(QBrush(QColor("#1b5e20")))
-            p.setPen(QPen(QColor("#0a0a0a"), 2.5))
-            p.drawEllipse(rect)
-        p.end()
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.LeftButton:
@@ -1795,6 +1920,26 @@ class BallWidget(QWidget):
             self.expand_requested.emit()
         self._drag_pos = self._press_pos = None; self._dragging = False
         super().mouseReleaseEvent(event)
+
+
+class TransientPencilLoader(PencilLoaderWidget):
+    """
+    A transient loading indicator that appears at the bottom-center of the screen.
+    """
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        # Set flags for top-level transient window
+        self.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.show_at_bottom_center()
+
+    def show_at_bottom_center(self) -> None:
+        screen = QApplication.primaryScreen().availableGeometry()
+        x = (screen.width() - self.width()) // 2
+        y = screen.height() - self.height() - 60
+        self.move(x, y)
+        self.show()
+        self.raise_()
 
 
 # ---------------------------------------------------------------------------
@@ -1933,6 +2078,16 @@ class SettingsWindow(QDialog):
             p.setY(max(0, min(p.y(), g.bottom() - self.height())))
             self.move(p)
         self.show(); self.raise_(); self.activateWindow()
+
+    def set_ball_loading(self, loading: bool, error: str | None = None) -> None:
+        """Proxy loading state to the minimized ball widget."""
+        if self._ball:
+            if error:
+                self._ball.set_error(error)
+            elif loading:
+                self._ball.set_loading(True)
+            else:
+                self._ball.set_loading(False)
 
     def _drag_start(self, event: QMouseEvent) -> None:
         if event.button() == Qt.LeftButton:

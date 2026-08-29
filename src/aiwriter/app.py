@@ -14,7 +14,7 @@ from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from . import clipboard, llm
 from .hotkey import GlobalHotkey
-from .settings import QuickReplaceToast
+from .settings import QuickReplaceToast, TransientPencilLoader
 from .window import FloatingWindow, load_fonts
 
 
@@ -78,6 +78,7 @@ class AIWriterApp(QObject):
         self._qr_hwnd: int = 0
         # Pause quick-replace / normal hotkey while Settings window is visible
         self._settings_open: bool = False
+        self._active_qr_loader: Optional[QWidget] = None
 
         self._setup_tray()
         self._connect_signals()
@@ -229,6 +230,24 @@ class AIWriterApp(QObject):
     def _start_quick_replace(self, text: str) -> None:
         """Launch an LLM transform in the background and auto-paste the result."""
         self._cleanup_qr_worker()
+
+        # --- Loader Logic ---
+        # 1. Check if the minimized BallWidget is visible
+        ball_visible = False
+        sw = getattr(self._window, "_settings_window", None)
+        if sw and getattr(sw, "_ball", None) and sw._ball.isVisible():
+            ball_visible = True
+
+        if ball_visible:
+            # Proxy loading state to the ball
+            self._window.set_settings_ball_loading(True)
+            self._active_qr_loader = sw._ball
+        else:
+            # Show transient loader at bottom-center
+            loader = TransientPencilLoader()
+            loader.set_loading(True)
+            self._active_qr_loader = loader
+
         # Get the active tag's prompt so QR uses same polish rules.
         try:
             from . import llm as _llm
@@ -256,6 +275,15 @@ class AIWriterApp(QObject):
     @Slot(str)
     def _on_qr_finished(self, corrected: str) -> None:
         """Quick Replace succeeded — paste result back silently."""
+        # Reset loader
+        if self._active_qr_loader:
+            if isinstance(self._active_qr_loader, TransientPencilLoader):
+                self._active_qr_loader.set_loading(False)
+                self._active_qr_loader.hide()
+            else:
+                self._window.set_settings_ball_loading(False)
+            self._active_qr_loader = None
+
         # Detect obviously garbled / unusable output (empty, or contains 'Jumple'
         # which indicates the LLM couldn't handle the text).
         stripped = corrected.strip()
@@ -277,10 +305,16 @@ class AIWriterApp(QObject):
             self._show_qr_error(f"Could not paste: {exc}")
 
     def _show_qr_error(self, message: str) -> None:
-        """Show a self-dismissing dark toast overlay centred on the floating window."""
-        # We need a visible parent widget; use the floating window (it can be hidden,
-        # so show it briefly as an invisible host, or use the desktop).
-        # Best UX: show the toast centred on the screen using a transparent top-level.
+        """Show error in the active loader, or fallback to toast."""
+        if self._active_qr_loader:
+            self._active_qr_loader.set_error(message)
+            # If it's a transient loader, it's already visible.
+            # If it's the ball, it's already visible.
+            # We might want to hide it after a few seconds.
+            QTimer.singleShot(3000, self._clear_qr_loader)
+            return
+
+        # Fallback to the old toast logic if no loader is active
         from PySide6.QtWidgets import QGraphicsOpacityEffect
         toast_host = self._window
         # If the floating window is hidden, show it at screen centre first.
@@ -292,6 +326,16 @@ class AIWriterApp(QObject):
             )
             toast_host.show()
         QuickReplaceToast.show_error(toast_host, message)
+
+    def _clear_qr_loader(self) -> None:
+        """Reset the active QR loader to IDLE and hide if transient."""
+        if self._active_qr_loader:
+            if isinstance(self._active_qr_loader, TransientPencilLoader):
+                self._active_qr_loader.set_error(None)
+                self._active_qr_loader.hide()
+            else:
+                self._window.set_settings_ball_loading(False)
+            self._active_qr_loader = None
 
     def _quit(self) -> None:
         self._cleanup_worker()

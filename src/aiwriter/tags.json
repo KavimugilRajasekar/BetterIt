@@ -1,6 +1,9 @@
 {
-  "Chat": "Improve grammar, spelling, and clarity while keeping a casual, friendly tone suitable for a chat message. Keep it short.",
-  "LinkedIn Post": "Rewrite this as a polished, professional LinkedIn post. Keep it concise, engaging, and appropriate for a professional network audience.",
-  "Email": "Rewrite this as a clear, polite, and professional email while preserving the original intent and any specific details.",
-  "Twitter/X Post": "Rewrite this as a punchy, concise post suitable for Twitter/X. Keep the core message but make it snappy and casual."
+  "Grammar & Clarity": "Fix all grammar, spelling, punctuation, and phrasing errors. Make the text flow smoothly, clearly, and naturally while strictly preserving its original meaning and tone.",
+  "Professional Email": "Rewrite this into a clear, polite, and professional email with a natural greeting and closing if appropriate. Ensure the message is structured, courteous, and easy to read.",
+  "LinkedIn Post": "Rewrite this as an engaging, high-impact LinkedIn post. Use strong hooks, clean line breaks for readability, professional yet conversational phrasing, and 2-3 relevant hashtags.",
+  "Twitter / X": "Rewrite this as a punchy, engaging post suitable for Twitter/X. Keep it concise, energetic, and under 280 characters with maximum clarity.",
+  "Chat / Casual": "Improve grammar, spelling, and flow while keeping a warm, friendly, and casual conversational tone suitable for direct messaging or Slack.",
+  "Make Concise": "Condense and tighten this text. Remove fluff, redundancies, and filler words while preserving all essential points and core message.",
+  "Bullet Points": "Organize the key information and ideas in this text into a clean, well-formatted bulleted list with clear, easy-to-read takeaways."
 }
