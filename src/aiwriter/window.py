@@ -297,7 +297,7 @@ class FloatingWindow(QWidget):
 
         # "+" button: swaps for a spinner while polishing.
         self._plus_stack = QStackedWidget()
-        self._plus_stack.setFixedSize(36, 36)
+        self._plus_stack.setFixedSize(40, 40)
 
         self._new_tag_btn = QPushButton("+")
         self._new_tag_btn.setObjectName("IconButton")
@@ -336,9 +336,18 @@ class FloatingWindow(QWidget):
         self._improved.setFixedHeight(120)
         root.addWidget(self._improved)
 
-        # Replace row
+        # Replace & Copy row
         replace_row = QHBoxLayout()
+        replace_row.setSpacing(10)
         replace_row.addStretch(1)
+
+        self._copy_btn = QPushButton("Copy")
+        self._copy_btn.setObjectName("Secondary")
+        self._copy_btn.setEnabled(False)
+        self._copy_btn.setFixedHeight(40)
+        self._copy_btn.setMinimumWidth(85)
+        replace_row.addWidget(self._copy_btn)
+
         self._replace_btn = QPushButton("Replace")
         self._replace_btn.setObjectName("Replace")
         self._replace_btn.setEnabled(False)
@@ -355,6 +364,7 @@ class FloatingWindow(QWidget):
     def _wire_signals(self) -> None:
         self._close_btn.clicked.connect(self.hide_window)
         self._correct_btn.clicked.connect(self._on_correct_clicked)
+        self._copy_btn.clicked.connect(self._on_copy_clicked)
         self._replace_btn.clicked.connect(self._on_replace_clicked)
         self._new_tag_btn.clicked.connect(self._on_open_settings_clicked)
 
@@ -422,9 +432,16 @@ class FloatingWindow(QWidget):
         self._improved.clear()
         self._improved.setProperty("state", "")
         self._status_label.setText("")
+        self._copy_btn.setEnabled(False)
+        self._copy_btn.setText("Copy")
         self._replace_btn.setEnabled(False)
         self._correct_btn.setEnabled(True)
         self._end_loading_visuals()
+
+        # Select default tag from configuration if present
+        default_tag = self._tag_store.get_config("default_tag")
+        if default_tag and default_tag in self._tag_store.names():
+            self._refresh_tag_combo(select=default_tag)
 
         # Center on primary screen
         screen = self.screen()
@@ -441,6 +458,7 @@ class FloatingWindow(QWidget):
         a spinner, Polish button disabled."""
         self._correct_btn.setEnabled(False)
         self._correct_btn.setText("Polishing…")
+        self._copy_btn.setEnabled(False)
         self._replace_btn.setEnabled(False)
         self._status_label.setText("")
 
@@ -452,11 +470,13 @@ class FloatingWindow(QWidget):
         self._plus_spinner.start()
 
     def show_improved(self, corrected: str) -> None:
-        """Switch to result state: improved text shown, Replace enabled."""
+        """Switch to result state: improved text shown, Replace and Copy enabled."""
         self._end_loading_visuals()
         self._status_label.setText("done")
         self._improved.setProperty("state", "")
         self._improved.setPlainText(corrected)
+        self._copy_btn.setEnabled(True)
+        self._copy_btn.setText("Copy")
         self._replace_btn.setEnabled(True)
         self._correct_btn.setEnabled(True)
 
@@ -466,6 +486,7 @@ class FloatingWindow(QWidget):
         self._status_label.setText("error")
         self._improved.setProperty("state", "error")
         self._improved.setPlainText(message)
+        self._copy_btn.setEnabled(False)
         self._replace_btn.setEnabled(False)
         self._correct_btn.setEnabled(True)
 
@@ -492,6 +513,8 @@ class FloatingWindow(QWidget):
         self._improved.setProperty("state", "")
         self._status_label.setText("")
         self._correct_btn.setEnabled(True)
+        self._copy_btn.setEnabled(False)
+        self._copy_btn.setText("Copy")
         self._replace_btn.setEnabled(False)
         self._end_loading_visuals()
 
@@ -506,6 +529,17 @@ class FloatingWindow(QWidget):
         self.show_loading()
         self.correct_requested.emit(text, prompt)
 
+    def _on_copy_clicked(self) -> None:
+        text = self._improved.toPlainText()
+        if not text:
+            return
+        clipboard = QApplication.clipboard()
+        if clipboard:
+            clipboard.setText(text)
+        self._copy_btn.setText("Copied!")
+        self._status_label.setText("copied")
+        QTimer.singleShot(1500, lambda: self._copy_btn.setText("Copy"))
+
     def _on_replace_clicked(self) -> None:
         text = self._improved.toPlainText()
         if not text:
@@ -519,6 +553,12 @@ class FloatingWindow(QWidget):
             self.hide_window()
             event.accept()
             return
+        # Ctrl+Enter to trigger Polish
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter) and (event.modifiers() & Qt.ControlModifier):
+            if self._correct_btn.isEnabled():
+                self._on_correct_clicked()
+                event.accept()
+                return
         super().keyPressEvent(event)
 
     # -- Rounded corners for transparency -----------------------------------
@@ -546,13 +586,17 @@ def load_fonts() -> None:
 
     base_dir = Path(__file__).resolve().parent
     fonts_dir = base_dir / "fonts"
+    if not fonts_dir.exists():
+        # Check parent directories (e.g. project root)
+        alt_dir = base_dir.parent.parent / "fonts"
+        if alt_dir.exists():
+            fonts_dir = alt_dir
 
     font_files = [
         fonts_dir / "Comfortaa" / "Comfortaa-VariableFont_wght.ttf",
         fonts_dir / "Playwrite_US_Modern" / "PlaywriteUSModern.ttf",
     ]
 
-    # Fall back to static files if a variable font is unavailable.
     comfortaa_static = fonts_dir / "Comfortaa" / "static" / "Comfortaa-Regular.ttf"
     playwrite_static = fonts_dir / "Playwrite_US_Modern" / "static" / "PlaywriteUSModern-Regular.ttf"
 

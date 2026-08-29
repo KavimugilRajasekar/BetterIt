@@ -141,7 +141,7 @@ class UITestWindow(QWidget):
     # Simulated AI response
     # ------------------------------------------------------------------
 
-    def _simulate_correction(self, original: str) -> None:
+    def _simulate_correction(self, original: str, prompt: str = "") -> None:
         """
         Simulates the AI without creating another thread.
 
@@ -150,14 +150,17 @@ class UITestWindow(QWidget):
 
         self.floating.show_loading()
 
-        corrected = (
-            "This is a test sentence with improved grammar "
-            "and corrected spelling."
-        )
+        if prompt:
+            corrected = f"[Transformed as requested: {original}]"
+        else:
+            corrected = (
+                "This is a test sentence with improved grammar "
+                "and corrected spelling."
+            )
 
         # Simulate an AI delay.
         QTimer.singleShot(
-            1200,
+            1000,
             lambda: self.floating.show_improved(corrected)
         )
 

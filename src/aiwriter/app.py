@@ -8,45 +8,48 @@ import sys
 from typing import Optional
 
 from dotenv import load_dotenv
-from PySide6.QtCore import QObject, QThread, QTimer, Signal, Qt
+from PySide6.QtCore import QObject, QThread, QTimer, Signal, Slot, Qt
 from PySide6.QtGui import QAction, QIcon
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from . import clipboard, llm
 from .hotkey import GlobalHotkey
-from .window import FloatingWindow
+from .window import FloatingWindow, load_fonts
 
 
 # --- LLM worker thread ------------------------------------------------------
 
 class GrammarWorker(QObject):
-    """Runs `llm.correct_grammar` off the GUI thread."""
+    """Runs `llm.transform_text` off the GUI thread."""
 
-    finished = Signal(str)  # the corrected text
+    finished = Signal(str)  # the transformed text
     failed = Signal(str)    # an error message
 
-    def __init__(self, text: str, parent: QObject | None = None) -> None:
-        super().__init__(parent)
+    def __init__(self, text: str, prompt: str = "") -> None:
+        super().__init__(None)  # Worker is created without parent to allow thread move
         self._text = text
+        self._prompt = prompt
 
+    @Slot()
     def run(self) -> None:
         try:
-            corrected = llm.correct_grammar(self._text)
+            transformed = llm.transform_text(self._text, prompt=self._prompt)
         except llm.GrammarError as exc:
             self.failed.emit(str(exc))
-        except Exception as exc:  # last-ditch safety net
+        except Exception as exc:  # safety net
             self.failed.emit(f"Unexpected error: {exc}")
         else:
-            self.finished.emit(corrected)
+            self.finished.emit(transformed)
 
 
 # --- Application ------------------------------------------------------------
 
-class AIWriterApp:
+class AIWriterApp(QObject):
     """Owns the QApplication, the floating window, and the hotkey listener."""
 
     def __init__(self) -> None:
-        # Load .env before anything tries to read OPENAI_API_KEY.
+        super().__init__()
+        # Load .env before anything tries to read API keys.
         load_dotenv()
 
         if not os.environ.get("OPEN_ROUTER"):
@@ -57,6 +60,9 @@ class AIWriterApp:
 
         self._qt = QApplication(sys.argv)
         self._qt.setQuitOnLastWindowClosed(False)  # tray-only lifecycle
+
+        # Load bundled typography cleanly on start
+        load_fonts()
 
         self._window = FloatingWindow()
         self._hotkey = GlobalHotkey(os.environ.get("HOTKEY", "ctrl+space"))
@@ -75,25 +81,27 @@ class AIWriterApp:
             self._qt.style().StandardPixmap.SP_DialogApplyButton
         )
         self._tray = QSystemTrayIcon(icon, self._qt)
-        self._tray.setToolTip("AI Writing Assistant")
+        self._tray.setToolTip("BetterIt AI Writer")
 
         menu = QMenu()
-        quit_action = QAction("Quit", menu)
+        quit_action = QAction("Quit BetterIt", menu)
         quit_action.triggered.connect(self._quit)
         menu.addAction(quit_action)
         self._tray.setContextMenu(menu)
         self._tray.show()
 
     def _connect_signals(self) -> None:
-        # Hotkey fires in a worker thread; the signal marshals to the GUI thread.
-        self._hotkey.triggered.connect(self._on_hotkey)
-        # Window asks us to do work.
+        # Hotkey fires in a worker thread; since AIWriterApp is a QObject,
+        # Qt queues the signal onto the GUI thread automatically.
+        self._hotkey.triggered.connect(self._on_hotkey, Qt.ConnectionType.QueuedConnection)
+        # Window asks us to do work with text and prompt
         self._window.correct_requested.connect(self._on_correct_requested)
         self._window.replace_requested.connect(self._on_replace_requested)
         self._window.closed.connect(self._on_window_closed)
 
     # -- Slots -------------------------------------------------------------
 
+    @Slot()
     def _on_hotkey(self) -> None:
         """User pressed Ctrl+Space somewhere. Grab the selection and show the UI."""
         # Capture the source window *before* we touch the clipboard, so the
@@ -103,30 +111,30 @@ class AIWriterApp:
             selected = clipboard.read_selected()
         except Exception as exc:
             msg = f"Could not read selection: {exc}"
-            QTimer.singleShot(0, lambda: self._window.show_error(msg))
+            self._window.show_error(msg)
             return
 
         if not selected or not selected.strip():
             # Nothing was selected — silently do nothing.
             return
 
-        # Marshal onto the GUI thread before touching any Qt widget.
-        QTimer.singleShot(0, lambda: self._window.show_for_text(selected))
+        self._window.show_for_text(selected)
 
-    def _on_correct_requested(self, text: str) -> None:
-        """User clicked Correct Grammar. Run the LLM in a worker thread."""
-        # Tear down any previous worker.
+    @Slot(str, str)
+    def _on_correct_requested(self, text: str, prompt: str = "") -> None:
+        """User clicked Polish / Transform. Run the LLM in a worker thread."""
+        # Tear down any previous worker safely.
         self._cleanup_worker()
 
-        thread = QThread(self._qt)
-        worker = GrammarWorker(text)
+        thread = QThread()
+        worker = GrammarWorker(text, prompt=prompt)
         worker.moveToThread(thread)
 
         thread.started.connect(worker.run)
         worker.finished.connect(self._on_llm_finished, Qt.ConnectionType.QueuedConnection)
         worker.failed.connect(self._on_llm_failed, Qt.ConnectionType.QueuedConnection)
 
-        # Once the worker is done, quit the thread.
+        # Clean up thread and worker on finish
         worker.finished.connect(thread.quit, Qt.ConnectionType.QueuedConnection)
         worker.failed.connect(thread.quit, Qt.ConnectionType.QueuedConnection)
         thread.finished.connect(worker.deleteLater)
@@ -136,12 +144,15 @@ class AIWriterApp:
         self._worker_thread = thread
         thread.start()
 
+    @Slot(str)
     def _on_llm_finished(self, corrected: str) -> None:
         self._window.show_improved(corrected)
 
+    @Slot(str)
     def _on_llm_failed(self, message: str) -> None:
         self._window.show_error(message)
 
+    @Slot(str)
     def _on_replace_requested(self, corrected: str) -> None:
         """User clicked Replace. Paste into the source app."""
         # Hide first so the source window comes to the front cleanly.
@@ -158,7 +169,6 @@ class AIWriterApp:
             self._window.show_error(f"Could not paste: {exc}")
 
     def _on_window_closed(self) -> None:
-        # Nothing to do; placeholder for future "remember last position" logic.
         pass
 
     # -- Helpers -----------------------------------------------------------
@@ -168,11 +178,11 @@ class AIWriterApp:
             try:
                 if self._worker_thread.isRunning():
                     self._worker_thread.quit()
-                    self._worker_thread.wait(2000)
+                    self._worker_thread.wait(1000)
             except Exception:
                 pass
+            self._worker_thread = None
         self._worker = None
-        self._worker_thread = None
 
     def _quit(self) -> None:
         self._cleanup_worker()
