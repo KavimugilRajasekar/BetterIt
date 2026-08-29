@@ -3,18 +3,18 @@ The always-on-top floating window shown when the hotkey fires.
 Drag & movable, fixed size, completely rounded corners,
 green theme with slight transparency and clean layout.
 
-Includes a Tag selector (left of the "Polish" button) that lets the user
-pick a preset "mode" (Chat, LinkedIn Post, Email, ...) or create/edit a
-custom tag with its own prompt via the TagEditorDialog window.
+The "Tag" selector sits in the same horizontal row as the "Polish" button.
+Tapping "Polish" greys out the tag box (showing "Thinking…" instead of the
+tag name) and swaps the "+" button for a loading spinner until the rewrite
+comes back. Tapping "+" opens the bigger Settings window (settings.py),
+which has a side panel with "Edit Tag" and "Settings" sections.
 """
 
 from __future__ import annotations
 
-import json
 import sys
-from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer, QSize, Signal, QPoint
+from PySide6.QtCore import QPoint, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QBitmap,
     QBrush,
@@ -29,319 +29,38 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
-    QDialog,
-    QDialogButtonBox,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
-    QMessageBox,
     QPushButton,
-    QSizePolicy,
+    QStackedWidget,
+    QStyle,
+    QStyleOptionComboBox,
+    QStylePainter,
     QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
+try:
+    # Normal case: window.py lives inside a package (e.g. aiwriter/window.py)
+    # alongside settings.py, tag_store.py, and theme.py.
+    from .settings import SettingsWindow
+    from .tag_store import TagStore
+    from .theme import STYLESHEET
+except ImportError:
+    # Fallback: window.py is being run/imported as a standalone script with
+    # settings.py, tag_store.py, theme.py sitting next to it (no package).
+    from settings import SettingsWindow
+    from tag_store import TagStore
+    from theme import STYLESHEET
+
 
 # --- Window geometry ---------------------------------------------------------
 # The fixed window must be tall enough to fit every row without squeezing/
-# overlapping content. Computed generously from the sum of each row's height
-# plus margins/spacing (see _build_ui for the actual rows).
+# overlapping content (see _build_ui for the actual rows).
 WINDOW_WIDTH = 460
-WINDOW_HEIGHT = 560
+WINDOW_HEIGHT = 500
 CORNER_RADIUS = 26
-
-
-# --- Tag storage --------------------------------------------------------------
-
-DEFAULT_TAGS: dict[str, str] = {
-    "Chat": (
-        "Improve grammar, spelling, and clarity while keeping a casual, "
-        "friendly tone suitable for a chat message. Keep it short."
-    ),
-    "LinkedIn Post": (
-        "Rewrite this as a polished, professional LinkedIn post. Keep it "
-        "concise, engaging, and appropriate for a professional network audience."
-    ),
-    "Email": (
-        "Rewrite this as a clear, polite, and professional email while "
-        "preserving the original intent and any specific details."
-    ),
-    "Twitter/X Post": (
-        "Rewrite this as a punchy, concise post suitable for Twitter/X. "
-        "Keep the core message but make it snappy and casual."
-    ),
-}
-
-
-class TagStore:
-    """Loads/saves user-defined tags (name -> prompt) to a small JSON file
-    that lives next to this script, seeded with a few useful defaults."""
-
-    def __init__(self) -> None:
-        self._path = Path(__file__).resolve().parent / "tags.json"
-        self._tags: dict[str, str] = {}
-        self.load()
-
-    def load(self) -> None:
-        if self._path.exists():
-            try:
-                data = json.loads(self._path.read_text(encoding="utf-8"))
-                if isinstance(data, dict) and data:
-                    self._tags = {str(k): str(v) for k, v in data.items()}
-                    return
-            except (json.JSONDecodeError, OSError):
-                pass
-        # Fall back to (and persist) the defaults.
-        self._tags = dict(DEFAULT_TAGS)
-        self.save()
-
-    def save(self) -> None:
-        try:
-            self._path.write_text(
-                json.dumps(self._tags, indent=2, ensure_ascii=False),
-                encoding="utf-8",
-            )
-        except OSError:
-            pass
-
-    def names(self) -> list[str]:
-        return sorted(self._tags.keys(), key=str.lower)
-
-    def prompt_for(self, name: str) -> str:
-        return self._tags.get(name, "")
-
-    def set_tag(self, name: str, prompt: str) -> None:
-        self._tags[name] = prompt
-        self.save()
-
-    def rename(self, old_name: str, new_name: str, prompt: str) -> None:
-        if old_name in self._tags and old_name != new_name:
-            del self._tags[old_name]
-        self._tags[new_name] = prompt
-        self.save()
-
-    def delete(self, name: str) -> bool:
-        """Returns False (and refuses) if this would remove the last tag."""
-        if len(self._tags) <= 1 or name not in self._tags:
-            return False
-        del self._tags[name]
-        self.save()
-        return True
-
-
-# --- Styling ----------------------------------------------------------------
-
-# Green theme with black border, fully rounded corners, slight transparency
-STYLESHEET = """
-QWidget#FloatingWindow {
-    background-color: rgba(240, 255, 240, 0.92);
-    border: 3px solid #0a0a0a;
-    border-radius: 28px;
-}
-
-QLabel#Title {
-    color: #0a2e0a;
-    font-size: 17px;
-    font-weight: 700;
-    letter-spacing: 0.5px;
-    padding: 0 2px 2px 2px;
-    font-family: 'Playwrite US Modern';
-}
-
-QLabel#PaneLabel {
-    color: #1a5a1a;
-    font-size: 11px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.8px;
-    font-family: 'Comfortaa';
-}
-
-QLabel#TagLabel {
-    color: #1a5a1a;
-    font-size: 12px;
-    font-weight: 700;
-    font-family: 'Comfortaa';
-}
-
-QTextEdit {
-    background-color: rgba(255, 255, 255, 0.88);
-    color: #0a1a0a;
-    border: 2px solid #0a0a0a;
-    border-radius: 18px;
-    padding: 12px 14px;
-    font-size: 13px;
-    selection-background-color: #4caf84;
-    font-family: 'Comfortaa';
-}
-
-QTextEdit:focus {
-    border-color: #0a0a0a;
-    border-width: 2px;
-}
-
-QTextEdit#ImprovedPane[state="error"] {
-    color: #c0392b;
-    border-color: #0a0a0a;
-    background-color: rgba(255, 230, 230, 0.85);
-}
-
-QLineEdit {
-    background-color: rgba(255, 255, 255, 0.88);
-    color: #0a1a0a;
-    border: 2px solid #0a0a0a;
-    border-radius: 14px;
-    padding: 8px 12px;
-    font-size: 13px;
-    font-family: 'Comfortaa';
-}
-
-QComboBox {
-    background-color: rgba(255, 255, 255, 0.9);
-    color: #0a2e0a;
-    border: 2px solid #0a0a0a;
-    border-radius: 16px;
-    padding: 6px 12px;
-    font-size: 12px;
-    font-weight: 700;
-    font-family: 'Comfortaa';
-}
-
-QComboBox:hover {
-    border-color: #0a0a0a;
-    background-color: rgba(255, 255, 255, 1.0);
-}
-
-QComboBox::drop-down {
-    border: none;
-    width: 20px;
-}
-
-QComboBox QAbstractItemView {
-    background-color: #ffffff;
-    color: #0a2e0a;
-    border: 2px solid #0a0a0a;
-    border-radius: 8px;
-    selection-background-color: #a8d5a8;
-    outline: none;
-    padding: 4px;
-}
-
-QPushButton {
-    background-color: #2e7d32;
-    color: #ffffff;
-    border: 2.5px solid #0a0a0a;
-    border-radius: 20px;
-    padding: 8px 20px;
-    font-size: 13px;
-    font-weight: 700;
-    font-family: 'Comfortaa';
-}
-
-QPushButton:hover {
-    background-color: #388e3c;
-    border-color: #0a0a0a;
-}
-
-QPushButton:pressed {
-    background-color: #1b5e20;
-}
-
-QPushButton:disabled {
-    background-color: #6d8f6d;
-    color: #d4e0d4;
-    border-color: #3a4a3a;
-}
-
-QPushButton#Primary {
-    background-color: #1b5e20;
-    color: #ffffff;
-    border-color: #0a0a0a;
-}
-
-QPushButton#Primary:hover {
-    background-color: #2e7d32;
-}
-
-QPushButton#Primary:pressed {
-    background-color: #0d3d12;
-}
-
-QPushButton#CloseButton {
-    background-color: #e5e7eb;
-    color: #374151;
-    border: none;
-    font-size: 16px;
-    font-weight: 700;
-    padding: 0;
-    border-radius: 15px;
-    min-width: 30px;
-    max-width: 30px;
-    min-height: 30px;
-    max-height: 30px;
-}
-
-QPushButton#CloseButton:hover {
-    color: #ffffff;
-    background-color: #ef4444;
-}
-
-QPushButton#CloseButton:pressed {
-    background-color: #dc2626;
-}
-
-QPushButton#IconButton {
-    background-color: rgba(255, 255, 255, 0.9);
-    color: #1b5e20;
-    border: 2px solid #0a0a0a;
-    border-radius: 16px;
-    font-size: 14px;
-    font-weight: 700;
-    padding: 0;
-    min-width: 32px;
-    max-width: 32px;
-    min-height: 32px;
-    max-height: 32px;
-}
-
-QPushButton#IconButton:hover {
-    background-color: #a8d5a8;
-}
-
-QPushButton#Replace {
-    background-color: #00a86b;
-    color: #ffffff;
-    border-color: #0a0a0a;
-}
-
-QPushButton#Replace:hover {
-    background-color: #00c97a;
-}
-
-QPushButton#Replace:disabled {
-    background-color: #7daa8a;
-    color: #d4e8d4;
-    border-color: #3a5a3a;
-}
-
-QScrollBar:vertical {
-    background: rgba(200, 230, 200, 0.3);
-    width: 10px;
-    border-radius: 5px;
-    margin: 2px;
-}
-
-QScrollBar::handle:vertical {
-    background: #2e7d32;
-    border-radius: 5px;
-    min-height: 20px;
-}
-
-QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-    height: 0px;
-}
-"""
 
 
 # --- Custom widgets ---------------------------------------------------------
@@ -349,27 +68,20 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
 class Spinner(QWidget):
     """A tiny dependency-free rotating-arc spinner (green theme)."""
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None, size: int = 20) -> None:
         super().__init__(parent)
         self._angle = 0
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._advance)
-        self.setFixedSize(20, 20)
-        # Reserve the space even when hidden so neighboring widgets
-        # (status label / Polish button) don't jump around.
-        size_policy = self.sizePolicy()
-        size_policy.setRetainSizeWhenHidden(True)
-        self.setSizePolicy(size_policy)
-        self.hide()
+        self.setFixedSize(size, size)
 
     def start(self) -> None:
         self._angle = 0
-        self.show()
         self._timer.start(50)
+        self.update()
 
     def stop(self) -> None:
         self._timer.stop()
-        self.hide()
 
     def _advance(self) -> None:
         self._angle = (self._angle + 36) % 360
@@ -390,117 +102,88 @@ class Spinner(QWidget):
         painter.drawArc(2, 2, self.width() - 4, self.height() - 4, start, span)
 
 
-# --- Tag editor dialog -------------------------------------------------------
+class MarqueeComboBox(QComboBox):
+    """A QComboBox that horizontally scrolls ("floats") its current text
+    when the selected tag name is too wide to fit in the shrunk box,
+    instead of silently truncating it. The dropdown arrow still opens the
+    normal list so another tag can always be picked."""
 
-class TagEditorDialog(QDialog):
-    """A small standalone window for creating or editing a tag + its prompt."""
-
-    def __init__(
-        self,
-        parent: QWidget | None,
-        existing_names: list[str],
-        name: str = "",
-        prompt: str = "",
-    ) -> None:
+    def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._is_edit = bool(name)
-        self._original_name = name
-        self._existing_names = existing_names
+        self._offset = 0.0
+        self._timer = QTimer(self)
+        self._timer.setInterval(40)
+        self._timer.timeout.connect(self._advance)
+        self.currentTextChanged.connect(self._sync_scroll_state)
 
-        self.setWindowTitle("Edit Tag" if self._is_edit else "New Tag")
-        self.setModal(True)
-        self.setMinimumWidth(360)
-        self.setStyleSheet(STYLESHEET)
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self._sync_scroll_state()
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(12)
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._sync_scroll_state()
 
-        name_label = QLabel("Tag name")
-        name_label.setObjectName("TagLabel")
-        layout.addWidget(name_label)
+    # -- measurement -------------------------------------------------------
 
-        self._name_edit = QLineEdit(name)
-        self._name_edit.setPlaceholderText("e.g. LinkedIn Post")
-        layout.addWidget(self._name_edit)
+    def _text_width(self) -> int:
+        return self.fontMetrics().horizontalAdvance(self.currentText())
 
-        prompt_label = QLabel("Prompt")
-        prompt_label.setObjectName("TagLabel")
-        layout.addWidget(prompt_label)
-
-        self._prompt_edit = QTextEdit(prompt)
-        self._prompt_edit.setPlaceholderText(
-            "Describe how the text should be rewritten when this tag is selected..."
+    def _text_rect(self):
+        opt = QStyleOptionComboBox()
+        self.initStyleOption(opt)
+        rect = self.style().subControlRect(
+            QStyle.CC_ComboBox, opt, QStyle.SC_ComboBoxEditField, self
         )
-        self._prompt_edit.setFixedHeight(140)
-        layout.addWidget(self._prompt_edit)
+        rect.adjust(4, 0, -2, 0)
+        return rect
 
-        button_row = QHBoxLayout()
-        button_row.setSpacing(10)
+    def _sync_scroll_state(self, *_args) -> None:
+        if self._text_width() > self._text_rect().width():
+            self._offset = 0.0
+            if not self._timer.isActive():
+                self._timer.start()
+        else:
+            self._timer.stop()
+            self._offset = 0.0
+        self.update()
 
-        if self._is_edit:
-            self._delete_btn = QPushButton("Delete")
-            self._delete_btn.setStyleSheet(
-                "QPushButton { background-color: #c0392b; }"
-                "QPushButton:hover { background-color: #e74c3c; }"
-            )
-            self._delete_btn.clicked.connect(self._on_delete)
-            button_row.addWidget(self._delete_btn)
+    def _advance(self) -> None:
+        self._offset += 1.5
+        gap = 26
+        total = self._text_width() + gap
+        if self._offset >= total:
+            self._offset = 0.0
+        self.update()
 
-        button_row.addStretch(1)
+    # -- painting ------------------------------------------------------------
 
-        cancel_btn = QPushButton("Cancel")
-        cancel_btn.clicked.connect(self.reject)
-        button_row.addWidget(cancel_btn)
+    def paintEvent(self, _event) -> None:
+        painter = QStylePainter(self)
+        opt = QStyleOptionComboBox()
+        self.initStyleOption(opt)
+        opt.currentText = ""  # we draw the text ourselves, below
+        painter.drawComplexControl(QStyle.CC_ComboBox, opt)
 
-        save_btn = QPushButton("Save")
-        save_btn.setObjectName("Primary")
-        save_btn.clicked.connect(self._on_save)
-        button_row.addWidget(save_btn)
+        rect = self._text_rect()
+        text = self.currentText()
+        fm = self.fontMetrics()
+        text_w = fm.horizontalAdvance(text)
 
-        layout.addLayout(button_row)
+        painter.save()
+        painter.setClipRect(rect)
+        painter.setPen(self.palette().buttonText().color() if self.isEnabled() else QColor("#6d8f6d"))
+        y = rect.center().y() + (fm.ascent() - fm.descent()) // 2
 
-        self._delete_requested = False
-
-    # -- results --------------------------------------------------------
-
-    @property
-    def delete_requested(self) -> bool:
-        return self._delete_requested
-
-    def result_values(self) -> tuple[str, str]:
-        return self._name_edit.text().strip(), self._prompt_edit.toPlainText().strip()
-
-    # -- validation -------------------------------------------------------
-
-    def _on_save(self) -> None:
-        name, prompt = self.result_values()
-        if not name:
-            QMessageBox.warning(self, "Missing name", "Please give this tag a name.")
-            return
-        if not prompt:
-            QMessageBox.warning(self, "Missing prompt", "Please write a prompt for this tag.")
-            return
-
-        clashes = any(
-            existing.lower() == name.lower() and existing != self._original_name
-            for existing in self._existing_names
-        )
-        if clashes:
-            QMessageBox.warning(self, "Duplicate tag", f'A tag named "{name}" already exists.')
-            return
-
-        self.accept()
-
-    def _on_delete(self) -> None:
-        confirm = QMessageBox.question(
-            self,
-            "Delete tag",
-            f'Delete the tag "{self._original_name}"?',
-        )
-        if confirm == QMessageBox.Yes:
-            self._delete_requested = True
-            self.accept()
+        if text_w <= rect.width():
+            painter.drawText(rect, Qt.AlignVCenter | Qt.AlignLeft, text)
+        else:
+            x = rect.x() - int(self._offset)
+            painter.drawText(x, y, text)
+            second_x = x + text_w + 26
+            if second_x < rect.right():
+                painter.drawText(second_x, y, text)
+        painter.restore()
 
 
 # --- Main window ------------------------------------------------------------
@@ -525,6 +208,7 @@ class FloatingWindow(QWidget):
         self.setMask(self._rounded_mask(WINDOW_WIDTH, WINDOW_HEIGHT, CORNER_RADIUS))
 
         self._tag_store = TagStore()
+        self._settings_window: SettingsWindow | None = None
 
         # For dragging
         self._drag_pos: QPoint | None = None
@@ -588,53 +272,61 @@ class FloatingWindow(QWidget):
         self._original.setFixedHeight(80)
         root.addWidget(self._original)
 
-        # Tag row: label + selector + edit + new-tag buttons.
-        # This sits directly above the Polish button, satisfying the
-        # "tag selector to the left of Polish" requirement while leaving
-        # every control room to breathe.
-        tag_row = QHBoxLayout()
-        tag_row.setSpacing(8)
+        # -- Single control row: Tag selector + "+" + status + Polish --------
+        control_row = QHBoxLayout()
+        control_row.setSpacing(8)
 
-        tag_label = QLabel("Tag")
-        tag_label.setObjectName("TagLabel")
-        tag_row.addWidget(tag_label)
+        # Tag box: swaps between the combo (idle) and a greyed "Thinking…"
+        # label (while polishing) so the tag name visibly disappears.
+        self._tag_stack = QStackedWidget()
+        self._tag_stack.setFixedHeight(34)
+        self._tag_stack.setMaximumWidth(126)
 
-        self._tag_combo = QComboBox()
-        self._tag_combo.setMinimumWidth(150)
-        self._tag_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self._tag_combo = MarqueeComboBox()
+        self._tag_combo.setMinimumWidth(92)
+        self._tag_combo.setMaximumWidth(126)
         self._refresh_tag_combo()
-        tag_row.addWidget(self._tag_combo, 1)
 
-        self._edit_tag_btn = QPushButton("✎")
-        self._edit_tag_btn.setObjectName("IconButton")
-        self._edit_tag_btn.setToolTip("Edit selected tag")
-        tag_row.addWidget(self._edit_tag_btn)
+        self._tag_thinking_label = QLabel("Thinking…")
+        self._tag_thinking_label.setObjectName("TagThinking")
+        self._tag_thinking_label.setAlignment(Qt.AlignCenter)
+
+        self._tag_stack.addWidget(self._tag_combo)          # index 0: idle
+        self._tag_stack.addWidget(self._tag_thinking_label)  # index 1: loading
+        control_row.addWidget(self._tag_stack)
+
+        # "+" button: swaps for a spinner while polishing.
+        self._plus_stack = QStackedWidget()
+        self._plus_stack.setFixedSize(36, 36)
 
         self._new_tag_btn = QPushButton("+")
         self._new_tag_btn.setObjectName("IconButton")
-        self._new_tag_btn.setToolTip("Create a new tag")
-        tag_row.addWidget(self._new_tag_btn)
+        self._new_tag_btn.setToolTip("Manage tags")
 
-        root.addLayout(tag_row)
+        spinner_wrap = QWidget()
+        spinner_layout = QVBoxLayout(spinner_wrap)
+        spinner_layout.setContentsMargins(0, 0, 0, 0)
+        spinner_layout.setAlignment(Qt.AlignCenter)
+        self._plus_spinner = Spinner(size=20)
+        spinner_layout.addWidget(self._plus_spinner)
 
-        # Action row: spinner + status + Polish button (tag selector above
-        # already sits to its left visually; keeping Polish on its own row
-        # gives it a full-width comfortable hit target with no crowding).
-        action_row = QHBoxLayout()
-        action_row.setSpacing(12)
-        self._spinner = Spinner(self._container)
-        action_row.addWidget(self._spinner)
+        self._plus_stack.addWidget(self._new_tag_btn)  # index 0: idle
+        self._plus_stack.addWidget(spinner_wrap)        # index 1: loading
+        control_row.addWidget(self._plus_stack)
+
         self._status_label = QLabel("")
         self._status_label.setStyleSheet(
             "color: #1a5a1a; font-size: 13px; font-weight: 600; font-family: 'Comfortaa';"
         )
-        action_row.addWidget(self._status_label, 1)
+        control_row.addWidget(self._status_label, 1)
+
         self._correct_btn = QPushButton("Polish")
         self._correct_btn.setObjectName("Primary")
         self._correct_btn.setFixedHeight(40)
         self._correct_btn.setMinimumWidth(100)
-        action_row.addWidget(self._correct_btn)
-        root.addLayout(action_row)
+        control_row.addWidget(self._correct_btn)
+
+        root.addLayout(control_row)
 
         # Improved pane
         root.addWidget(self._make_pane_label("Improved"))
@@ -664,13 +356,12 @@ class FloatingWindow(QWidget):
         self._close_btn.clicked.connect(self.hide_window)
         self._correct_btn.clicked.connect(self._on_correct_clicked)
         self._replace_btn.clicked.connect(self._on_replace_clicked)
-        self._new_tag_btn.clicked.connect(self._on_new_tag_clicked)
-        self._edit_tag_btn.clicked.connect(self._on_edit_tag_clicked)
+        self._new_tag_btn.clicked.connect(self._on_open_settings_clicked)
 
     # -- Tag management -------------------------------------------------
 
     def _refresh_tag_combo(self, select: str | None = None) -> None:
-        current = select or self._tag_combo.currentText() if self._tag_combo.count() else select
+        current = select or (self._tag_combo.currentText() if self._tag_combo.count() else None)
         self._tag_combo.blockSignals(True)
         self._tag_combo.clear()
         names = self._tag_store.names()
@@ -680,36 +371,20 @@ class FloatingWindow(QWidget):
         elif names:
             self._tag_combo.setCurrentIndex(0)
         self._tag_combo.blockSignals(False)
+        self._tag_combo._sync_scroll_state()
 
-    def _on_new_tag_clicked(self) -> None:
-        dialog = TagEditorDialog(self, existing_names=self._tag_store.names())
-        if dialog.exec() == QDialog.Accepted:
-            name, prompt = dialog.result_values()
-            self._tag_store.set_tag(name, prompt)
-            self._refresh_tag_combo(select=name)
+    def _on_open_settings_clicked(self) -> None:
+        if self._settings_window is None:
+            self._settings_window = SettingsWindow(self._tag_store, initial_page="Edit Tag")
+            self._settings_window.tags_changed.connect(self._on_tags_changed_externally)
+        else:
+            self._settings_window.open_page("Edit Tag")
+        self._settings_window.show()
+        self._settings_window.raise_()
+        self._settings_window.activateWindow()
 
-    def _on_edit_tag_clicked(self) -> None:
-        current_name = self._tag_combo.currentText()
-        if not current_name:
-            return
-        dialog = TagEditorDialog(
-            self,
-            existing_names=self._tag_store.names(),
-            name=current_name,
-            prompt=self._tag_store.prompt_for(current_name),
-        )
-        if dialog.exec() == QDialog.Accepted:
-            if dialog.delete_requested:
-                if self._tag_store.delete(current_name):
-                    self._refresh_tag_combo()
-                else:
-                    QMessageBox.information(
-                        self, "Can't delete", "At least one tag must remain."
-                    )
-                return
-            name, prompt = dialog.result_values()
-            self._tag_store.rename(current_name, name, prompt)
-            self._refresh_tag_combo(select=name)
+    def _on_tags_changed_externally(self) -> None:
+        self._refresh_tag_combo(select=self._tag_combo.currentText())
 
     # -- Drag implementation -------------------------------------------------
 
@@ -749,8 +424,7 @@ class FloatingWindow(QWidget):
         self._status_label.setText("")
         self._replace_btn.setEnabled(False)
         self._correct_btn.setEnabled(True)
-        self._correct_btn.show()
-        self._spinner.stop()
+        self._end_loading_visuals()
 
         # Center on primary screen
         screen = self.screen()
@@ -763,15 +437,23 @@ class FloatingWindow(QWidget):
         self.show()
 
     def show_loading(self) -> None:
-        """Switch to loading state: spinner on, button disabled."""
+        """Switch to loading state: tag box greyed + 'Thinking…', '+' becomes
+        a spinner, Polish button disabled."""
         self._correct_btn.setEnabled(False)
-        self._spinner.start()
-        self._status_label.setText("thinking...")
+        self._correct_btn.setText("Polishing…")
         self._replace_btn.setEnabled(False)
+        self._status_label.setText("")
+
+        self._tag_combo.setEnabled(False)
+        self._tag_stack.setCurrentWidget(self._tag_thinking_label)
+
+        self._new_tag_btn.setEnabled(False)
+        self._plus_stack.setCurrentIndex(1)
+        self._plus_spinner.start()
 
     def show_improved(self, corrected: str) -> None:
         """Switch to result state: improved text shown, Replace enabled."""
-        self._spinner.stop()
+        self._end_loading_visuals()
         self._status_label.setText("done")
         self._improved.setProperty("state", "")
         self._improved.setPlainText(corrected)
@@ -780,16 +462,26 @@ class FloatingWindow(QWidget):
 
     def show_error(self, message: str) -> None:
         """Switch to error state: red message, no Replace."""
-        self._spinner.stop()
+        self._end_loading_visuals()
         self._status_label.setText("error")
         self._improved.setProperty("state", "error")
         self._improved.setPlainText(message)
         self._replace_btn.setEnabled(False)
         self._correct_btn.setEnabled(True)
 
+    def _end_loading_visuals(self) -> None:
+        self._plus_spinner.stop()
+        self._plus_stack.setCurrentIndex(0)
+        self._new_tag_btn.setEnabled(True)
+
+        self._tag_stack.setCurrentWidget(self._tag_combo)
+        self._tag_combo.setEnabled(True)
+
+        self._correct_btn.setText("Polish")
+
     def hide_window(self) -> None:
         """Hide and reset for the next invocation."""
-        self._spinner.stop()
+        self._end_loading_visuals()
         self._reset_to_idle()
         self.hide()
         self.closed.emit()
@@ -801,6 +493,7 @@ class FloatingWindow(QWidget):
         self._status_label.setText("")
         self._correct_btn.setEnabled(True)
         self._replace_btn.setEnabled(False)
+        self._end_loading_visuals()
 
     # -- Internal slots -----------------------------------------------------
 
@@ -849,6 +542,8 @@ class FloatingWindow(QWidget):
 
 def load_fonts() -> None:
     """Load BetterIt's bundled fonts without requiring system installation."""
+    from pathlib import Path
+
     base_dir = Path(__file__).resolve().parent
     fonts_dir = base_dir / "fonts"
 
@@ -905,7 +600,6 @@ class DemoWindow(QWidget):
     def _on_correct_requested(self, text: str, prompt: str) -> None:
         # Simulate LLM processing (in the real app, `prompt` would be sent
         # to the LLM along with `text` to steer the rewrite for this tag).
-        self.floating.show_loading()
         QTimer.singleShot(1500, lambda: self._simulate_response(text))
 
     def _simulate_response(self, text: str) -> None:
