@@ -206,3 +206,11 @@ def test_reachability(api_key: str | None = None, model: str | None = None) -> t
 def correct_grammar(text: str, *, model: str | None = None) -> str:
     """Backward-compatible wrapper for grammar correction."""
     return transform_text(text, prompt=None, model=model)
+
+
+def _get_active_prompt() -> str:
+    """Return the prompt string for the currently active tag (used by Quick Replace)."""
+    store = TagStore()
+    default_tag = store.get_config("default_tag", "Grammar & Clarity")
+    prompt = store.prompt_for(default_tag) or ""
+    return prompt

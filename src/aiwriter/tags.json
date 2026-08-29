@@ -1,9 +1,6 @@
 {
-  "Chat": "Improve grammar, spelling, and clarity while keeping a casual, friendly tone suitable for a chat message. Keep it short.\nsdsdf\nd\nfsd\nf\nsdf\ndsf\n# dsf",
+  "Chat": "Improve grammar, spelling, and clarity while keeping a casual, friendly tone suitable for a chat message. Keep it short.",
   "LinkedIn Post": "Rewrite this as a polished, professional LinkedIn post. Keep it concise, engaging, and appropriate for a professional network audience.",
   "Email": "Rewrite this as a clear, polite, and professional email while preserving the original intent and any specific details.",
-  "Twitter/X Post": "Rewrite this as a punchy, concise post suitable for Twitter/X. Keep the core message but make it snappy and casual.",
-  "Solve": "U have to Solev this under all Test Case Created by use and before submiting it U have to test it .\n\nProviding with the Workgin Code .",
-  "sd": "sdf",
-  "dsf": "sdf"
+  "Twitter/X Post": "Rewrite this as a punchy, concise post suitable for Twitter/X. Keep the core message but make it snappy and casual."
 }

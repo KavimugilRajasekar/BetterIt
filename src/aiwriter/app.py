@@ -14,6 +14,7 @@ from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from . import clipboard, llm
 from .hotkey import GlobalHotkey
+from .settings import QuickReplaceToast
 from .window import FloatingWindow, load_fonts
 
 
@@ -53,8 +54,8 @@ class AIWriterApp(QObject):
         load_dotenv()
 
         from .tag_store import TagStore
-        store = TagStore()
-        if not store.get_active_api_key():
+        self._store = TagStore()
+        if not self._store.get_active_api_key():
             print(
                 "OpenRouter API key is not configured yet. Press Ctrl+Space with no text to configure it in Settings.",
                 file=sys.stderr,
@@ -71,6 +72,12 @@ class AIWriterApp(QObject):
         self._worker: Optional[GrammarWorker] = None
         self._worker_thread: Optional[QThread] = None
         self._source_hwnd: int = 0
+        # Quick-Replace worker (separate from the normal FloatingWindow worker)
+        self._qr_worker: Optional[GrammarWorker] = None
+        self._qr_thread: Optional[QThread] = None
+        self._qr_hwnd: int = 0
+        # Pause quick-replace / normal hotkey while Settings window is visible
+        self._settings_open: bool = False
 
         self._setup_tray()
         self._connect_signals()
@@ -100,12 +107,27 @@ class AIWriterApp(QObject):
         self._window.correct_requested.connect(self._on_correct_requested)
         self._window.replace_requested.connect(self._on_replace_requested)
         self._window.closed.connect(self._on_window_closed)
+        # Track Settings open/close so we can pause the hotkey logic
+        self._window.settings_opened.connect(self._on_settings_opened)
+        self._window.settings_closed.connect(self._on_settings_closed)
 
     # -- Slots -------------------------------------------------------------
 
     @Slot()
+    def _on_settings_opened(self) -> None:
+        self._settings_open = True
+
+    @Slot()
+    def _on_settings_closed(self) -> None:
+        self._settings_open = False
+
+    @Slot()
     def _on_hotkey(self) -> None:
         """User pressed Ctrl+Space somewhere. Grab the selection and show the UI."""
+        # While Settings is open, ignore the hotkey completely.
+        if self._settings_open:
+            return
+
         # Capture the source window *before* we touch the clipboard, so the
         # paste-back step knows where to land.
         self._source_hwnd = clipboard.get_foreground_hwnd()
@@ -119,6 +141,12 @@ class AIWriterApp(QObject):
         if not selected or not selected.strip():
             # Nothing was selected — open Settings panel directly instead of floating window
             self._window.open_settings("Edit Tag")
+            return
+
+        # --- Quick Replace mode ---
+        if self._store.get_config("quick_replace", False):
+            self._qr_hwnd = self._source_hwnd
+            self._start_quick_replace(selected)
             return
 
         self._window.show_for_text(selected)
@@ -187,9 +215,89 @@ class AIWriterApp(QObject):
             self._worker_thread = None
         self._worker = None
 
+    def _cleanup_qr_worker(self) -> None:
+        if self._qr_thread is not None:
+            try:
+                if self._qr_thread.isRunning():
+                    self._qr_thread.quit()
+                    self._qr_thread.wait(1000)
+            except Exception:
+                pass
+            self._qr_thread = None
+        self._qr_worker = None
+
+    def _start_quick_replace(self, text: str) -> None:
+        """Launch an LLM transform in the background and auto-paste the result."""
+        self._cleanup_qr_worker()
+        # Get the active tag's prompt so QR uses same polish rules.
+        try:
+            from . import llm as _llm
+            prompt = _llm._get_active_prompt()
+        except Exception:
+            prompt = ""
+
+        thread = QThread()
+        worker = GrammarWorker(text, prompt=prompt)
+        worker.moveToThread(thread)
+
+        thread.started.connect(worker.run)
+        worker.finished.connect(self._on_qr_finished, Qt.ConnectionType.QueuedConnection)
+        worker.failed.connect(self._on_qr_failed, Qt.ConnectionType.QueuedConnection)
+
+        worker.finished.connect(thread.quit, Qt.ConnectionType.QueuedConnection)
+        worker.failed.connect(thread.quit, Qt.ConnectionType.QueuedConnection)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+
+        self._qr_worker = worker
+        self._qr_thread = thread
+        thread.start()
+
+    @Slot(str)
+    def _on_qr_finished(self, corrected: str) -> None:
+        """Quick Replace succeeded — paste result back silently."""
+        # Detect obviously garbled / unusable output (empty, or same as original
+        # but with weird markers that suggest the LLM couldn't handle it).
+        stripped = corrected.strip()
+        if not stripped:
+            self._show_qr_error("The AI returned an empty response and could not replace the selection.")
+            return
+        QTimer.singleShot(80, lambda: self._do_qr_paste(corrected))
+
+    @Slot(str)
+    def _on_qr_failed(self, message: str) -> None:
+        """Quick Replace LLM call failed — show a toast instead of the full window."""
+        self._show_qr_error(message)
+
+    def _do_qr_paste(self, corrected: str) -> None:
+        try:
+            clipboard.focus_window(self._qr_hwnd)
+            clipboard.paste_back(corrected)
+        except Exception as exc:
+            self._show_qr_error(f"Could not paste: {exc}")
+
+    def _show_qr_error(self, message: str) -> None:
+        """Show a self-dismissing dark toast overlay centred on the floating window."""
+        # We need a visible parent widget; use the floating window (it can be hidden,
+        # so show it briefly as an invisible host, or use the desktop).
+        # Best UX: show the toast centred on the screen using a transparent top-level.
+        from PySide6.QtWidgets import QGraphicsOpacityEffect
+        toast_host = self._window
+        # If the floating window is hidden, show it at screen centre first.
+        if not toast_host.isVisible():
+            screen = self._qt.primaryScreen().availableGeometry()
+            toast_host.move(
+                screen.center().x() - toast_host.width() // 2,
+                screen.center().y() - toast_host.height() // 2,
+            )
+            toast_host.show()
+        QuickReplaceToast.show_error(toast_host, message)
+
     def _quit(self) -> None:
         self._cleanup_worker()
+        self._cleanup_qr_worker()
         self._hotkey.stop()
+
         self._qt.quit()
 
     # -- Entry point -------------------------------------------------------

@@ -283,6 +283,99 @@ class HoverIconButton(QPushButton):
         super().leaveEvent(event)
 
 
+class QuickReplaceToast(QFrame):
+    """
+    A self-dismissing error toast that appears centred over `parent_window`,
+    stays for 3 seconds, then fades out and destroys itself.
+
+    Usage::
+        QuickReplaceToast.show_error(parent_window, "Cannot replace: LLM returned garbled output.")
+    """
+
+    def __init__(self, parent_window: QWidget, message: str) -> None:
+        super().__init__(parent_window)
+        self.setObjectName("QuickReplaceToastFrame")
+        self.setStyleSheet("""
+            QFrame#QuickReplaceToastFrame {
+                background-color: #1a1a1a;
+                border: 1.5px solid #444444;
+                border-radius: 14px;
+            }
+            QLabel { color: #ffffff; font-size: 13px; font-family: 'Comfortaa'; }
+        """)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, False)
+        self.setFixedWidth(340)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(18, 14, 18, 14)
+        lay.setSpacing(6)
+
+        # Warning icon row
+        top_row = QHBoxLayout()
+        icon_lbl = QLabel("⚠")
+        icon_lbl.setStyleSheet(
+            "color: #f0a500; font-size: 20px; font-family: 'Comfortaa'; padding-right: 4px;"
+        )
+        top_row.addWidget(icon_lbl)
+        title_lbl = QLabel("Quick Replace Failed")
+        title_lbl.setStyleSheet(
+            "color: #ffffff; font-size: 13px; font-weight: 700; font-family: 'Comfortaa';"
+        )
+        top_row.addWidget(title_lbl, 1)
+        lay.addLayout(top_row)
+
+        msg_lbl = QLabel(message)
+        msg_lbl.setWordWrap(True)
+        msg_lbl.setStyleSheet(
+            "color: #cccccc; font-size: 12px; font-family: 'Comfortaa';"
+        )
+        lay.addWidget(msg_lbl)
+
+        self.adjustSize()
+
+        # Position: centred horizontally, 20% from top of parent
+        pw = parent_window
+        cx = pw.width() // 2 - self.width() // 2
+        cy = int(pw.height() * 0.2)
+        self.move(cx, cy)
+        self.show()
+        self.raise_()
+
+        # Fade-out animation using windowOpacity on parent isn't ideal for overlays;
+        # we use a QTimer to hide/delete after 3 s.
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.timeout.connect(self._dismiss)
+        self._timer.start(3000)
+
+        # Opacity fade-out animation
+        self._opacity_anim = QVariantAnimation(self)
+        self._opacity_anim.setStartValue(1.0)
+        self._opacity_anim.setEndValue(0.0)
+        self._opacity_anim.setDuration(400)
+        self._opacity_anim.setEasingCurve(QEasingCurve.InQuad)
+        self._opacity_anim.valueChanged.connect(self._on_opacity)
+        # Start fade at 2600 ms (so it finishes at 3000 ms)
+        QTimer.singleShot(2600, self._opacity_anim.start)
+
+    def _on_opacity(self, value: float) -> None:
+        effect = self.graphicsEffect()
+        if effect is None:
+            from PySide6.QtWidgets import QGraphicsOpacityEffect
+            effect = QGraphicsOpacityEffect(self)
+            self.setGraphicsEffect(effect)
+        effect.setOpacity(value)
+
+    def _dismiss(self) -> None:
+        self.hide()
+        self.deleteLater()
+
+    @staticmethod
+    def show_error(parent_window: QWidget, message: str) -> "QuickReplaceToast":
+        """Convenience constructor — creates, shows, auto-dismisses the toast."""
+        return QuickReplaceToast(parent_window, message)
+
+
 class ExpandOverlay(QFrame):
     """
     Animated overlay frame that expands a text edit to cover the container window
@@ -296,11 +389,11 @@ class ExpandOverlay(QFrame):
         start_widget: QWidget,
     ) -> None:
         super().__init__(parent_container)
-        self.setObjectName("SettingsCard")
+        self.setObjectName("ExpandOverlayFrame")
         self.setStyleSheet("""
-            QFrame#SettingsCard {
-                background-color: rgba(226, 244, 226, 0.98);
-                border: 2.5px solid #0a0a0a;
+            QFrame#ExpandOverlayFrame {
+                background-color: #ffffff;
+                border: 2px solid #d0d0d0;
                 border-radius: 20px;
             }
         """)
@@ -316,7 +409,8 @@ class ExpandOverlay(QFrame):
 
         hdr = QHBoxLayout()
         lbl = QLabel(title_text)
-        lbl.setObjectName("SectionLabel")
+        lbl.setStyleSheet("color: #0a0a0a; font-size: 15px; font-weight: 700;"
+                          " font-family: 'Playwrite US Modern', 'Comfortaa', sans-serif;")
         hdr.addWidget(lbl)
         hdr.addStretch(1)
 
@@ -757,6 +851,29 @@ class GeneralSettingsPage(QWidget):
         self._top_check.setChecked(bool(self._store.get_config("always_on_top", True)))
         self._top_check.toggled.connect(lambda v: self._store.set_config("always_on_top", v))
         cl.addWidget(self._top_check)
+
+        # Quick Replace option
+        qr_frame = QFrame(); qr_frame.setObjectName("InnerCard")
+        qrl = QVBoxLayout(qr_frame); qrl.setContentsMargins(14, 12, 14, 12); qrl.setSpacing(8)
+
+        qr_header = QHBoxLayout()
+        qr_header.addWidget(QLabel("Quick Replace", objectName="SectionLabel"))
+        self._quick_replace_check = QCheckBox("Enable")
+        self._quick_replace_check.setChecked(bool(self._store.get_config("quick_replace", False)))
+        self._quick_replace_check.toggled.connect(lambda v: self._store.set_config("quick_replace", v))
+        qr_header.addStretch(1)
+        qr_header.addWidget(self._quick_replace_check)
+        qrl.addLayout(qr_header)
+
+        hv = os.environ.get("HOTKEY", "Ctrl + Space")
+        qr_desc = QLabel(
+            f"When enabled, select any text and press <b>{hv}</b> — "
+            "BetterIt will silently polish it and instantly replace the selection in-place, "
+            "without opening any window."
+        )
+        qr_desc.setObjectName("SubLabel"); qr_desc.setWordWrap(True)
+        qrl.addWidget(qr_desc)
+        cl.addWidget(qr_frame)
 
         hk = QFrame(); hk.setObjectName("InnerCard")
         hkl = QVBoxLayout(hk); hkl.setContentsMargins(14, 12, 14, 12); hkl.setSpacing(6)

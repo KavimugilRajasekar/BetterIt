@@ -219,6 +219,8 @@ class FloatingWindow(QWidget):
     correct_requested = Signal(str, str)  # emits (original text, tag prompt)
     replace_requested = Signal(str)       # emits the corrected text
     closed = Signal()
+    settings_opened = Signal()           # emitted when Settings window is shown
+    settings_closed = Signal()           # emitted when Settings window is hidden/closed
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
