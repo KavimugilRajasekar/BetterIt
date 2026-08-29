@@ -52,9 +52,11 @@ class AIWriterApp(QObject):
         # Load .env before anything tries to read API keys.
         load_dotenv()
 
-        if not os.environ.get("OPEN_ROUTER"):
+        from .tag_store import TagStore
+        store = TagStore()
+        if not store.get_active_api_key():
             print(
-                "OPEN_ROUTER is not set. Add your OpenRouter API key to .env.",
+                "OpenRouter API key is not configured yet. Press Ctrl+Space with no text to configure it in Settings.",
                 file=sys.stderr,
             )
 
@@ -115,7 +117,8 @@ class AIWriterApp(QObject):
             return
 
         if not selected or not selected.strip():
-            # Nothing was selected — silently do nothing.
+            # Nothing was selected — open Settings panel directly instead of floating window
+            self._window.open_settings("Edit Tag")
             return
 
         self._window.show_for_text(selected)

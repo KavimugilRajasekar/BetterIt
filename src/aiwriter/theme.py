@@ -8,7 +8,13 @@ QWidget#FloatingWindow, QWidget#SettingsWindow {
     border-radius: 28px;
 }
 
-QDialog#SettingsDialog {
+QWidget#ThemedPopupContainer {
+    background-color: rgba(242, 255, 242, 0.98);
+    border: 3px solid #0a0a0a;
+    border-radius: 24px;
+}
+
+QDialog#SettingsDialog, QDialog#ThemedDialog {
     background-color: transparent;
 }
 
@@ -30,12 +36,33 @@ QLabel#SettingsTitle {
     font-family: 'Playwrite US Modern', 'Comfortaa', sans-serif;
 }
 
+QLabel#PopupTitle {
+    color: #0a2e0a;
+    font-size: 17px;
+    font-weight: 700;
+    font-family: 'Comfortaa';
+}
+
+QLabel#PopupMessage {
+    color: #1a3a1a;
+    font-size: 13px;
+    font-weight: 500;
+    font-family: 'Comfortaa';
+}
+
 QLabel#PaneLabel, QLabel#SectionLabel {
     color: #1a5a1a;
     font-size: 11px;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.8px;
+    font-family: 'Comfortaa';
+}
+
+QLabel#CardTitle {
+    color: #0a2e0a;
+    font-size: 15px;
+    font-weight: 700;
     font-family: 'Comfortaa';
 }
 
@@ -46,26 +73,156 @@ QLabel#SubLabel {
     font-family: 'Comfortaa';
 }
 
+QLabel#ModelNameLabel {
+    color: #0a2e0a;
+    font-size: 12px;
+    font-weight: 700;
+    font-family: 'Comfortaa';
+}
+
+QLabel#ActiveBadge {
+    background-color: #1b5e20;
+    color: #ffffff;
+    font-size: 11px;
+    font-weight: 700;
+    border-radius: 12px;
+    padding: 4px 10px;
+    font-family: 'Comfortaa';
+}
+
+QLabel#ModelActiveBadge {
+    background-color: #2e7d32;
+    color: #ffffff;
+    font-size: 11px;
+    font-weight: 700;
+    border-radius: 10px;
+    padding: 3px 8px;
+    font-family: 'Comfortaa';
+}
+
+QLabel#AboutHeroLabel {
+    color: #0a2e0a;
+    font-size: 18px;
+    font-weight: 700;
+    font-family: 'Playwrite US Modern', 'Comfortaa';
+}
+
+QLabel#AboutStepLabel {
+    color: #0a2e0a;
+    font-size: 13px;
+    font-weight: 700;
+    font-family: 'Comfortaa';
+}
+
+QLabel#AboutStepDesc {
+    color: #2e5a2e;
+    font-size: 12px;
+    font-weight: 500;
+    font-family: 'Comfortaa';
+    line-height: 1.4;
+}
+
+QLabel#AboutVersion {
+    color: #4a7a4a;
+    font-size: 11px;
+    font-weight: 600;
+    font-family: 'Comfortaa';
+}
+
+QLabel#AboutIconLabel {
+    font-size: 24px;
+    color: #1b5e20;
+}
+
 /* === Cards & Panels === */
 QFrame#SettingsCard {
-    background-color: rgba(255, 255, 255, 0.65);
-    border: 2px solid #0a0a0a;
+    background-color: rgba(255, 255, 255, 0.70);
+    border: 2.5px solid #0a0a0a;
+    border-radius: 22px;
+    padding: 16px;
+}
+
+QFrame#SingleWhiteCard {
+    background-color: #ffffff;
+    border: 2.5px solid #0a0a0a;
+    border-radius: 22px;
+    padding: 18px;
+}
+
+QFrame#KeyProfileCard {
+    background-color: #ffffff;
+    border: 2.5px solid #0a0a0a;
     border-radius: 20px;
     padding: 16px;
 }
 
-QFrame#InnerCard {
-    background-color: rgba(235, 248, 235, 0.8);
+QFrame#KeyProfileCard[active="true"] {
+    background-color: #ffffff;
+    border: 2.5px solid #1b5e20;
+    border-radius: 20px;
+    padding: 16px;
+}
+
+QFrame#NewProfileCard {
+    background-color: rgba(240, 255, 240, 0.95);
+    border: 2.5px dashed #1b5e20;
+    border-radius: 20px;
+    padding: 16px;
+}
+
+QFrame#ModelRowFrame {
+    background-color: rgba(244, 252, 244, 0.9);
     border: 1.5px solid #0a0a0a;
     border-radius: 14px;
+    padding: 6px 10px;
+}
+
+QFrame#ModelRowFrame[selected="true"] {
+    background-color: rgba(226, 248, 226, 0.98);
+    border: 2px solid #1b5e20;
+    border-radius: 14px;
+    padding: 6px 10px;
+}
+
+QFrame#InnerCard {
+    background-color: rgba(235, 248, 235, 0.85);
+    border: 2px solid #0a0a0a;
+    border-radius: 18px;
+    padding: 14px;
+}
+
+QFrame#StatusBanner {
+    background-color: rgba(240, 252, 240, 0.95);
+    border: 2px solid #0a0a0a;
+    border-radius: 16px;
+    padding: 8px 12px;
+}
+
+QFrame#AboutStepCard {
+    background-color: rgba(255, 255, 255, 0.80);
+    border: 2px solid rgba(10, 10, 10, 0.35);
+    border-radius: 18px;
     padding: 12px;
+}
+
+QFrame#AboutStepCard[active="true"] {
+    background-color: rgba(220, 250, 220, 0.98);
+    border: 2.5px solid #1b5e20;
+    border-radius: 18px;
+}
+
+QFrame#AboutHeroCard {
+    background-color: rgba(215, 245, 215, 0.85);
+    border: 2.5px solid #0a0a0a;
+    border-radius: 22px;
+    padding: 18px;
 }
 
 /* === Sidebar Navigation === */
 QListWidget#Sidebar {
-    background-color: rgba(226, 244, 226, 0.9);
+    background-color: rgba(226, 244, 226, 0.92);
     border: 2.5px solid #0a0a0a;
-    border-radius: 20px;
+    border-radius: 22px;
     padding: 8px;
     font-family: 'Comfortaa';
     outline: none;
@@ -94,7 +251,7 @@ QListWidget#Sidebar::item:selected {
 
 /* === Tag List === */
 QListWidget#TagList {
-    background-color: rgba(255, 255, 255, 0.9);
+    background-color: rgba(255, 255, 255, 0.92);
     border: 2px solid #0a0a0a;
     border-radius: 18px;
     padding: 6px;
@@ -126,7 +283,7 @@ QListWidget#TagList::item:selected {
 
 /* === Text Inputs === */
 QTextEdit {
-    background-color: rgba(255, 255, 255, 0.92);
+    background-color: rgba(255, 255, 255, 0.95);
     color: #0a1a0a;
     border: 2px solid #0a0a0a;
     border-radius: 18px;
@@ -149,11 +306,11 @@ QTextEdit#ImprovedPane[state="error"] {
 }
 
 QLineEdit {
-    background-color: rgba(255, 255, 255, 0.92);
+    background-color: rgba(255, 255, 255, 0.95);
     color: #0a1a0a;
     border: 2px solid #0a0a0a;
-    border-radius: 15px;
-    padding: 9px 14px;
+    border-radius: 16px;
+    padding: 8px 14px;
     font-size: 13px;
     font-family: 'Comfortaa';
     selection-background-color: #4caf84;
@@ -167,11 +324,11 @@ QLineEdit:focus {
 
 /* === Combo Boxes === */
 QComboBox {
-    background-color: rgba(255, 255, 255, 0.92);
+    background-color: rgba(255, 255, 255, 0.95);
     color: #0a2e0a;
     border: 2px solid #0a0a0a;
     border-radius: 16px;
-    padding: 7px 12px;
+    padding: 8px 14px;
     font-size: 12px;
     font-weight: 700;
     font-family: 'Comfortaa';
@@ -194,19 +351,19 @@ QComboBox:disabled {
 
 QComboBox::drop-down {
     border: none;
-    width: 22px;
-    margin-right: 4px;
+    width: 24px;
+    margin-right: 6px;
 }
 
 QComboBox QAbstractItemView {
     background-color: #ffffff;
     color: #0a2e0a;
     border: 2px solid #0a0a0a;
-    border-radius: 14px;
+    border-radius: 16px;
     selection-background-color: #2e7d32;
     selection-color: #ffffff;
     outline: none;
-    padding: 6px;
+    padding: 8px;
     font-family: 'Comfortaa';
     font-size: 12px;
 }
@@ -254,9 +411,9 @@ QPushButton {
     background-color: #2e7d32;
     color: #ffffff;
     border: 2.5px solid #0a0a0a;
-    border-radius: 19px;
-    padding: 8px 20px;
-    font-size: 13px;
+    border-radius: 18px;
+    padding: 7px 16px;
+    font-size: 12px;
     font-weight: 700;
     font-family: 'Comfortaa';
     outline: none;
@@ -295,6 +452,7 @@ QPushButton#Secondary {
     background-color: rgba(255, 255, 255, 0.92);
     color: #1b5e20;
     border: 2px solid #0a0a0a;
+    border-radius: 16px;
 }
 
 QPushButton#Secondary:hover {
@@ -310,6 +468,7 @@ QPushButton#Danger {
     background-color: #c0392b;
     color: #ffffff;
     border-color: #0a0a0a;
+    border-radius: 16px;
 }
 
 QPushButton#Danger:hover {
@@ -324,6 +483,62 @@ QPushButton#Danger:disabled {
     background-color: #b87b74;
     color: #f0d5d2;
     border-color: #4a2d2a;
+}
+
+QPushButton#DangerIcon {
+    background-color: #fee2e2;
+    color: #dc2626;
+    border: 1.5px solid #dc2626;
+    border-radius: 14px;
+    font-size: 13px;
+    font-weight: 700;
+    padding: 0px;
+    min-width: 28px;
+    max-width: 28px;
+    min-height: 28px;
+    max-height: 28px;
+}
+
+QPushButton#DangerIcon:hover {
+    background-color: #dc2626;
+    color: #ffffff;
+}
+
+QPushButton#DangerIcon:disabled {
+    background-color: #f3f4f6;
+    color: #9ca3af;
+    border-color: #d1d5db;
+}
+
+QPushButton#MiniAction {
+    background-color: #ffffff;
+    color: #1b5e20;
+    border: 1.5px solid #0a0a0a;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 3px 10px;
+    min-height: 26px;
+}
+
+QPushButton#MiniAction:hover {
+    background-color: #a8d5a8;
+    color: #0a2e0a;
+}
+
+QPushButton#ModelTestBtn {
+    background-color: #1b5e20;
+    color: #ffffff;
+    border: 1.5px solid #0a0a0a;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 3px 10px;
+    min-height: 26px;
+}
+
+QPushButton#ModelTestBtn:hover {
+    background-color: #2e7d32;
 }
 
 QPushButton#CloseButton {
@@ -347,6 +562,29 @@ QPushButton#CloseButton:hover {
 
 QPushButton#CloseButton:pressed {
     background-color: #dc2626;
+}
+
+QPushButton#MinimizeButton {
+    background-color: #e5e7eb;
+    color: #374151;
+    border: none;
+    font-size: 16px;
+    font-weight: 700;
+    padding: 0;
+    border-radius: 15px;
+    min-width: 30px;
+    max-width: 30px;
+    min-height: 30px;
+    max-height: 30px;
+}
+
+QPushButton#MinimizeButton:hover {
+    color: #ffffff;
+    background-color: #1b5e20;
+}
+
+QPushButton#MinimizeButton:pressed {
+    background-color: #0d3d12;
 }
 
 QPushButton#IconButton {
@@ -398,15 +636,15 @@ QPushButton#Replace:disabled {
 }
 
 QPushButton#ViewToggle {
-    background-color: rgba(255, 255, 255, 0.85);
+    background-color: rgba(255, 255, 255, 0.88);
     color: #1a5a1a;
     border: 1.5px solid #0a0a0a;
-    border-radius: 12px;
-    padding: 3px 12px;
+    border-radius: 14px;
+    padding: 4px 12px;
     font-size: 11px;
     font-weight: 700;
     font-family: 'Comfortaa';
-    min-height: 24px;
+    min-height: 26px;
 }
 
 QPushButton#ViewToggle:hover {
@@ -422,14 +660,14 @@ QPushButton#ViewToggle:checked {
 /* === Scrollbars === */
 QScrollBar:vertical {
     background: rgba(200, 230, 200, 0.3);
-    width: 9px;
-    border-radius: 4.5px;
+    width: 8px;
+    border-radius: 4px;
     margin: 2px;
 }
 
 QScrollBar::handle:vertical {
     background: #2e7d32;
-    border-radius: 4.5px;
+    border-radius: 4px;
     min-height: 24px;
 }
 
@@ -443,18 +681,29 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
 
 QScrollBar:horizontal {
     background: rgba(200, 230, 200, 0.3);
-    height: 9px;
-    border-radius: 4.5px;
+    height: 8px;
+    border-radius: 4px;
     margin: 2px;
 }
 
 QScrollBar::handle:horizontal {
     background: #2e7d32;
-    border-radius: 4.5px;
+    border-radius: 4px;
     min-width: 24px;
 }
 
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
     width: 0px;
+}
+
+/* === Scroll Area === */
+QScrollArea {
+    border: none;
+    background: transparent;
+    border-radius: 20px;
+}
+
+QScrollArea > QWidget > QWidget {
+    background: transparent;
 }
 """

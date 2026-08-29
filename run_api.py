@@ -4,8 +4,18 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-api_key = os.getenv("OPEN_ROUTER")
-model = os.getenv("MODEL")
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
+
+try:
+    from aiwriter.tag_store import TagStore
+    store = TagStore()
+    api_key = store.get_active_api_key() or os.getenv("OPEN_ROUTER")
+    model = store.get_active_model() or os.getenv("MODEL")
+except Exception:
+    api_key = os.getenv("OPEN_ROUTER")
+    model = os.getenv("MODEL")
 
 if not api_key:
     print("ERROR: OPEN_ROUTER is missing in .env")

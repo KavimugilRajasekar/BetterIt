@@ -383,18 +383,72 @@ class FloatingWindow(QWidget):
         self._tag_combo.blockSignals(False)
         self._tag_combo._sync_scroll_state()
 
-    def _on_open_settings_clicked(self) -> None:
+    def open_settings(self, page: str = "Edit Tag") -> None:
+        """Open Settings window (mutual exclusion: hides BetterIt window while Settings is open)."""
         if self._settings_window is None:
-            self._settings_window = SettingsWindow(self._tag_store, initial_page="Edit Tag")
+            self._settings_window = SettingsWindow(self._tag_store, initial_page=page)
             self._settings_window.tags_changed.connect(self._on_tags_changed_externally)
+            # When settings fully closes (not just minimized), restore the BetterIt window
+            self._settings_window.finished.connect(self._on_settings_closed)
         else:
-            self._settings_window.open_page("Edit Tag")
+            self._settings_window.open_page(page)
+
+        # Mutual exclusion: hide the BetterIt window while Settings is up
+        self.hide()
+
+        screen = self.screen() or self._settings_window.screen()
+        if screen is not None:
+            geo = screen.availableGeometry()
+            self._settings_window.move(
+                geo.center().x() - self._settings_window.width() // 2,
+                geo.center().y() - self._settings_window.height() // 2,
+            )
         self._settings_window.show()
         self._settings_window.raise_()
         self._settings_window.activateWindow()
 
+    def _on_settings_closed(self) -> None:
+        """Called when the Settings dialog is fully closed (not minimized)."""
+        # Don't auto-show; user will trigger via hotkey or tray again.
+        pass
+
+    def show_for_text(self, text: str) -> None:
+        """Populate the original pane and show the window centered; hide Settings first."""
+        # Mutual exclusion: hide settings if it's open
+        if self._settings_window is not None and self._settings_window.isVisible():
+            self._settings_window.hide()
+
+        self._original.setPlainText(text)
+        self._improved.clear()
+        self._improved.setProperty("state", "")
+        self._status_label.setText("")
+        self._copy_btn.setEnabled(False)
+        self._copy_btn.setText("Copy")
+        self._replace_btn.setEnabled(False)
+        self._correct_btn.setEnabled(True)
+        self._end_loading_visuals()
+
+        # Select default tag from configuration if present
+        default_tag = self._tag_store.get_config("default_tag")
+        if default_tag and default_tag in self._tag_store.names():
+            self._refresh_tag_combo(select=default_tag)
+
+        # Center on primary screen
+        screen = self.screen()
+        if screen is not None:
+            geo = screen.availableGeometry()
+            self.move(
+                geo.center().x() - self.width() // 2,
+                geo.center().y() - self.height() // 2,
+            )
+        self.show()
+
+    def _on_open_settings_clicked(self) -> None:
+        self.open_settings("Edit Tag")
+
     def _on_tags_changed_externally(self) -> None:
         self._refresh_tag_combo(select=self._tag_combo.currentText())
+
 
     # -- Drag implementation -------------------------------------------------
 
@@ -426,32 +480,6 @@ class FloatingWindow(QWidget):
 
     # -- Public API ---------------------------------------------------------
 
-    def show_for_text(self, text: str) -> None:
-        """Populate the original pane and show the window centered."""
-        self._original.setPlainText(text)
-        self._improved.clear()
-        self._improved.setProperty("state", "")
-        self._status_label.setText("")
-        self._copy_btn.setEnabled(False)
-        self._copy_btn.setText("Copy")
-        self._replace_btn.setEnabled(False)
-        self._correct_btn.setEnabled(True)
-        self._end_loading_visuals()
-
-        # Select default tag from configuration if present
-        default_tag = self._tag_store.get_config("default_tag")
-        if default_tag and default_tag in self._tag_store.names():
-            self._refresh_tag_combo(select=default_tag)
-
-        # Center on primary screen
-        screen = self.screen()
-        if screen is not None:
-            geo = screen.availableGeometry()
-            self.move(
-                geo.center().x() - self.width() // 2,
-                geo.center().y() - self.height() // 2,
-            )
-        self.show()
 
     def show_loading(self) -> None:
         """Switch to loading state: tag box greyed + 'Thinking…', '+' becomes
@@ -576,6 +604,7 @@ class FloatingWindow(QWidget):
         painter.setPen(Qt.NoPen)
         painter.drawPath(path)
         painter.setClipPath(path)
+        painter.end()
 
 
 # --- Bundled fonts -----------------------------------------------------------
