@@ -224,7 +224,7 @@ QListWidget#Sidebar {
     border: 2.5px solid #0a0a0a;
     border-radius: 22px;
     padding: 8px;
-    font-family: 'Comfortaa';
+    font-family: 'Playwrite US Modern', 'Playwrite US Trad', 'Playwrite US', 'Playwrite', 'Comfortaa', sans-serif;
     outline: none;
 }
 
@@ -236,6 +236,7 @@ QListWidget#Sidebar::item {
     font-weight: 700;
     margin-bottom: 6px;
     border: 1.5px solid transparent;
+    font-family: 'Playwrite US Modern', 'Playwrite US Trad', 'Playwrite US', 'Playwrite', 'Comfortaa', sans-serif;
 }
 
 QListWidget#Sidebar::item:hover {
@@ -486,28 +487,19 @@ QPushButton#Danger:disabled {
 }
 
 QPushButton#DangerIcon {
-    background-color: #fee2e2;
-    color: #dc2626;
-    border: 1.5px solid #dc2626;
-    border-radius: 14px;
-    font-size: 13px;
-    font-weight: 700;
+    background-color: transparent;
+    border: none;
+    border-radius: 6px;
     padding: 0px;
-    min-width: 28px;
-    max-width: 28px;
-    min-height: 28px;
-    max-height: 28px;
 }
 
 QPushButton#DangerIcon:hover {
-    background-color: #dc2626;
-    color: #ffffff;
+    background-color: rgba(192, 57, 43, 0.12);
 }
 
 QPushButton#DangerIcon:disabled {
-    background-color: #f3f4f6;
-    color: #9ca3af;
-    border-color: #d1d5db;
+    background-color: transparent;
+    opacity: 0.35;
 }
 
 QPushButton#MiniAction {
@@ -527,18 +519,14 @@ QPushButton#MiniAction:hover {
 }
 
 QPushButton#ModelTestBtn {
-    background-color: #1b5e20;
-    color: #ffffff;
-    border: 1.5px solid #0a0a0a;
-    border-radius: 12px;
-    font-size: 11px;
-    font-weight: 700;
-    padding: 3px 10px;
-    min-height: 26px;
+    background-color: transparent;
+    border: none;
+    border-radius: 6px;
+    padding: 0px;
 }
 
 QPushButton#ModelTestBtn:hover {
-    background-color: #2e7d32;
+    background-color: rgba(27, 94, 32, 0.12);
 }
 
 QPushButton#CloseButton {

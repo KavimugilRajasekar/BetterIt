@@ -10,13 +10,17 @@ from __future__ import annotations
 import os
 from typing import Any, Optional
 
-from PySide6.QtCore import QByteArray, QObject, QPoint, QSize, Qt, QThread, QTimer, Signal, Slot
+from PySide6.QtCore import (
+    QByteArray, QEasingCurve, QObject, QPoint, QPropertyAnimation,
+    QSize, Qt, QThread, QTimer, QVariantAnimation, Signal, Slot,
+)
 from PySide6.QtGui import (
     QBitmap,
     QBrush,
     QColor,
     QFont,
     QIcon,
+    QImage,
     QMouseEvent,
     QPainter,
     QPainterPath,
@@ -30,6 +34,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QFrame,
+    QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -79,6 +84,11 @@ _SVG_ICONS: dict[str, str] = {
         <path d="M19 6l-1 14H6L5 6"/>
         <path d="M10 11v6M14 11v6"/>
         <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+    </svg>""",
+
+    "circle_outline": """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+        stroke="{color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="10"/>
     </svg>""",
 
     "play": """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
@@ -168,8 +178,23 @@ _SVG_ICONS: dict[str, str] = {
 }
 
 
+def _load_png_icon(name: str, size: int) -> QIcon | None:
+    """Load specific PNG assets cleanly, falling back to None if not found/applicable."""
+    filename = "test.png" if name == "play" else "delete.png" if name == "trash" else None
+    if filename:
+        path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "assets", filename))
+        if os.path.exists(path):
+            pixmap = QPixmap(path)
+            return QIcon(pixmap.scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+    return None
+
+
 def _svg_icon(name: str, color: str = "#1a1a1a", size: int = 16) -> QIcon:
-    """Render an outlined SVG icon to a QIcon at the given pixel size and color."""
+    """Render an outlined SVG icon to a QIcon, loading custom PNGs for play/trash if available."""
+    png = _load_png_icon(name, size)
+    if png:
+        return png
+
     svg_str = _SVG_ICONS.get(name, "")
     if not svg_str:
         return QApplication.style().standardIcon(QStyle.SP_FileIcon)
@@ -214,6 +239,28 @@ def _icon_btn(
     btn.setIcon(_svg_icon(icon_name, color=color, size=size - 6))
     btn.setIconSize(QSize(size - 6, size - 6))
     return btn
+
+
+def _get_active_icon(colored: bool, size: int = 18) -> QIcon:
+    """Load active.png (colored) or not_active.png (inactive) as a QIcon."""
+    asset = "active.png" if colored else "not_active.png"
+    path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "assets", asset))
+
+    # Fallback: if asset missing, fall back to the other one or SVG
+    if not os.path.exists(path):
+        fallback = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "assets", "active.png"))
+        if os.path.exists(fallback):
+            path = fallback
+        else:
+            return _svg_icon("check", "#1b5e20" if colored else "#aaaaaa", size)
+
+    pixmap = QPixmap(path).scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+    icon = QIcon()
+    # Register for all modes so Qt never auto-greys or transforms the image
+    for mode in (QIcon.Normal, QIcon.Disabled, QIcon.Active, QIcon.Selected):
+        for state in (QIcon.On, QIcon.Off):
+            icon.addPixmap(pixmap, mode, state)
+    return icon
 
 
 # ---------------------------------------------------------------------------
@@ -377,7 +424,7 @@ class EditTagPage(QWidget):
         self._name_edit = QLineEdit(); self._name_edit.setPlaceholderText("e.g. LinkedIn Post, Professional Email…")
         rl.addWidget(self._name_edit)
 
-        pl = QLabel("Rewrite Prompt / Instructions"); pl.setObjectName("SectionLabel"); rl.addWidget(pl)
+        pl = QLabel("Instructions"); pl.setObjectName("SectionLabel"); rl.addWidget(pl)
 
         vt = QHBoxLayout(); vt.setSpacing(8)
         self._raw_btn = QPushButton("Raw"); self._raw_btn.setObjectName("ViewToggle")
@@ -545,7 +592,7 @@ class GeneralSettingsPage(QWidget):
 # ---------------------------------------------------------------------------
 
 class ReachabilityWorker(QObject):
-    finished = Signal(bool, str)
+    finished = Signal(str, bool, str)  # model_id, success, message
 
     def __init__(self, api_key: str, model: str) -> None:
         super().__init__()
@@ -555,7 +602,7 @@ class ReachabilityWorker(QObject):
     @Slot()
     def run(self) -> None:
         success, message = test_reachability(api_key=self._api_key, model=self._model)
-        self.finished.emit(success, message)
+        self.finished.emit(self._model, success, message)
 
 
 # ---------------------------------------------------------------------------
@@ -587,18 +634,20 @@ class ProfileCardWidget(QFrame):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
+        self._is_active = is_active
         self._space_data = space_data
         self._space_name = str(space_data.get("name", "OpenRouter"))
         self._store = tag_store
 
-        # Concurrency
-        self._test_thread: QThread | None = None
-        self._test_worker: ReachabilityWorker | None = None
-        self._active_test_model: str | None = None
+        # Parallel Concurrency
+        self._test_threads: dict[str, QThread] = {}
+        self._test_workers: dict[str, ReachabilityWorker] = {}
+        self._active_test_models: set[str] = set()
 
-        # Live references to model rows + buttons
+        # Live references to model rows + buttons + result labels
         self._model_row_frames: dict[str, QFrame] = {}
         self._test_btns: dict[str, QPushButton] = {}
+        self._model_result_labels: dict[str, QLabel] = {}
 
         # Loading animation
         self._loading_timer = QTimer(self)
@@ -608,12 +657,17 @@ class ProfileCardWidget(QFrame):
 
         self._key_revealed = False
 
-        # Card border: green if active, dark if not
+        # Animation tracking
+        self._row_anims: dict[str, QPropertyAnimation] = {}        # row height slide
+        self._test_opacity_effects: dict[str, QGraphicsOpacityEffect] = {}  # test btn fade
+        self._row_color_anims: dict[str, QVariantAnimation] = {}   # row bg color tween
+
+        # Card border: green if active, dark if not; alpha background matching settings cards
         self.setObjectName("KeyProfileCard")
         self.setStyleSheet(
-            "QFrame#KeyProfileCard{background:#fff;border:2.5px solid #1b5e20;border-radius:20px;}"
+            "QFrame#KeyProfileCard{background:rgba(255,255,255,0.70);border:2.5px solid #1b5e20;border-radius:20px;}"
             if is_active else
-            "QFrame#KeyProfileCard{background:#fff;border:2px solid #0a0a0a;border-radius:20px;}"
+            "QFrame#KeyProfileCard{background:rgba(255,255,255,0.70);border:2px solid #0a0a0a;border-radius:20px;}"
         )
 
         root = QVBoxLayout(self)
@@ -622,9 +676,6 @@ class ProfileCardWidget(QFrame):
 
         # ── Header ──────────────────────────────────────────────────────
         hdr = QHBoxLayout(); hdr.setSpacing(8)
-
-        dec = _icon_btn("profile", "Profile", 30, "#1b5e20")
-        dec.setEnabled(False); hdr.addWidget(dec)
 
         name_lbl = QLabel(self._space_name); name_lbl.setObjectName("CardTitle")
         hdr.addWidget(name_lbl)
@@ -653,37 +704,40 @@ class ProfileCardWidget(QFrame):
 
         # ── API Key ──────────────────────────────────────────────────────
         api_lbl_row = QHBoxLayout(); api_lbl_row.setSpacing(6)
-        kd = _icon_btn("key", "API Key", 24, "#1b5e20"); kd.setEnabled(False)
-        api_lbl_row.addWidget(kd)
         api_lbl_row.addWidget(QLabel("API Key", objectName="PaneLabel"), 1)
         root.addLayout(api_lbl_row)
 
+        stored_key: str = str(self._space_data.get("api_key", "") or "")
+
         key_row = QHBoxLayout(); key_row.setSpacing(8)
-        self._key_edit = QLineEdit(self._space_data.get("api_key", ""))
-        self._key_edit.setEchoMode(QLineEdit.Password)
+        self._key_edit = QLineEdit()
         self._key_edit.setFixedHeight(38)
-        self._key_edit.setPlaceholderText("sk-or-v1-…  Paste your API key here")
-        self._key_edit.textChanged.connect(
-            lambda t: self._store.update_key_space(self._space_name, api_key=t.strip()))
+        self._key_edit.setStyleSheet(
+            "QLineEdit { border: 1px solid rgba(10,10,10,0.18); border-radius: 16px; "
+            "background: rgba(255,255,255,0.85); color: #0a1a0a; padding: 8px 14px; "
+            "font-size: 13px; font-family: 'Comfortaa'; } "
+            "QLineEdit:focus { border: 1.5px solid rgba(27,94,32,0.45); background:#fff; }"
+        )
 
-        # Eye icon embedded inside the QLineEdit trailing side
-        self._eye_action = self._key_edit.addAction(
-            _svg_icon("eye", "#1b5e20", 16), QLineEdit.TrailingPosition)
-        self._eye_action.setToolTip("Show / Hide key")
-        self._eye_action.triggered.connect(self._toggle_eye)
+        if stored_key:
+            # Show masked: first 3 + dots + last 3
+            masked = self._mask_key(stored_key)
+            self._key_edit.setText(masked)
+            self._key_edit.setReadOnly(True)
+            self._key_edit.setPlaceholderText("")
+        else:
+            self._key_edit.setText("")
+            self._key_edit.setReadOnly(False)
+            self._key_edit.setPlaceholderText("sk-or-v1-…  Paste your API key here")
+
+        # Auto-save when user finishes typing a new key
+        self._key_edit.editingFinished.connect(self._commit_key)
+
         key_row.addWidget(self._key_edit, 1)
-
-        save_k = QPushButton("Save Key"); save_k.setObjectName("Primary")
-        save_k.setFixedHeight(38)
-        save_k.setIcon(_svg_icon("save", "#ffffff", 14)); save_k.setIconSize(QSize(14, 14))
-        save_k.clicked.connect(self._save_key)
-        key_row.addWidget(save_k)
         root.addLayout(key_row)
 
         # ── Models list ──────────────────────────────────────────────────
         ml_row = QHBoxLayout(); ml_row.setSpacing(6)
-        md = _icon_btn("cpu", "Configured Models", 24, "#1b5e20"); md.setEnabled(False)
-        ml_row.addWidget(md)
         ml_row.addWidget(QLabel("Configured Models", objectName="PaneLabel"), 1)
         root.addLayout(ml_row)
 
@@ -692,7 +746,8 @@ class ProfileCardWidget(QFrame):
 
         self._models_container = QVBoxLayout(); self._models_container.setSpacing(5)
         for m in models:
-            self._build_model_row(m, m == selected, len(models))
+            is_row_active = self._is_active and (m == selected)
+            self._build_model_row(m, is_row_active, len(models))
         root.addLayout(self._models_container)
 
         # ── Add Model ────────────────────────────────────────────────────
@@ -700,87 +755,228 @@ class ProfileCardWidget(QFrame):
         self._add_edit = QLineEdit()
         self._add_edit.setFixedHeight(34)
         self._add_edit.setPlaceholderText("Model ID  (e.g. google/gemini-2.5-pro, deepseek/deepseek-r1)")
+        self._add_edit.setStyleSheet(
+            "QLineEdit { border: 1px solid rgba(10,10,10,0.18); border-radius: 14px; "
+            "background: rgba(255,255,255,0.85); color: #0a1a0a; padding: 4px 12px; font-size: 12px; font-family: 'Comfortaa'; } "
+            "QLineEdit:focus { border: 1.5px solid rgba(27,94,32,0.45); background: #ffffff; }"
+        )
         self._add_edit.returnPressed.connect(self._add_model)
         add_row.addWidget(self._add_edit, 1)
+
         add_btn = QPushButton("Add Model"); add_btn.setObjectName("Secondary")
         add_btn.setFixedHeight(34)
+        add_btn.setStyleSheet(
+            "QPushButton { border: 1px solid rgba(10,10,10,0.18); border-radius: 14px; "
+            "background: rgba(255,255,255,0.85); color: #1b5e20; font-weight: 700; font-size: 12px; padding: 4px 12px; } "
+            "QPushButton:hover { border: 1.5px solid rgba(27,94,32,0.45); background: rgba(237,250,237,0.95); }"
+        )
         add_btn.setIcon(_svg_icon("add_folder", "#1b5e20", 14)); add_btn.setIconSize(QSize(14, 14))
         add_btn.clicked.connect(self._add_model)
         add_row.addWidget(add_btn)
         root.addLayout(add_row)
 
-        # ── Status panel (black border always) ──────────────────────────
-        self._status_frame = QFrame()
-        self._status_frame.setFixedHeight(36)
-        self._status_frame.setStyleSheet(
-            "QFrame{background:#f4fff4;border:2px solid #0a0a0a;border-radius:14px;}")
-        sl = QHBoxLayout(self._status_frame); sl.setContentsMargins(12, 4, 12, 4)
-        self._status_lbl = QLabel("")
-        self._status_lbl.setStyleSheet(
-            "border:none;background:transparent;color:#386038;"
-            "font-size:11px;font-weight:600;font-family:'Comfortaa';")
-        self._status_lbl.setWordWrap(False)
-        sl.addWidget(self._status_lbl)
-        root.addWidget(self._status_frame)
-
     # ── model row factory ─────────────────────────────────────────────────
 
     def _build_model_row(self, model_id: str, is_sel: bool, total: int) -> None:
         row = QFrame(); row.setObjectName("ModelRowFrame")
+        # Translucent alpha row styling matching window UI
         row.setStyleSheet(
-            "QFrame{background:#edfaed;border:2px solid #1b5e20;border-radius:13px;}"
+            "QFrame{background:rgba(237,250,237,0.85);border:none;border-radius:13px;}"
             if is_sel else
-            "QFrame{background:#fff;border:1.5px solid #0a0a0a;border-radius:13px;}")
+            "QFrame{background:rgba(255,255,255,0.55);border:none;border-radius:13px;}")
         self._model_row_frames[model_id] = row
 
-        rl = QHBoxLayout(row); rl.setContentsMargins(10, 5, 8, 5); rl.setSpacing(6)
+        # Main row layout is vertical to stack row contents and test result label
+        main_layout = QVBoxLayout(row)
+        main_layout.setContentsMargins(10, 6, 10, 6)
+        main_layout.setSpacing(4)
+
+        # Top row for controls
+        top_row = QHBoxLayout()
+        top_row.setContentsMargins(0, 0, 0, 0)
+        top_row.setSpacing(6)
+
         lbl = QLabel(model_id); lbl.setObjectName("ModelNameLabel")
         lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        rl.addWidget(lbl, 1)
+        top_row.addWidget(lbl, 1)
 
+        # 1. Active Selection Button (26x26, flat, icon-only — NO border, NO background ever)
+        active_btn = QPushButton()
+        active_btn.setFixedSize(26, 26)
+        active_btn.setIconSize(QSize(20, 20))
+        active_btn.setFlat(True)           # removes the platform-drawn frame
+        active_btn.setStyleSheet("""
+            QPushButton {
+                background: transparent;
+                border: none;
+                outline: none;
+                padding: 0px;
+            }
+            QPushButton:hover {
+                background: transparent;
+                border: none;
+            }
+            QPushButton:pressed {
+                background: transparent;
+                border: none;
+            }
+            QPushButton:focus {
+                background: transparent;
+                border: none;
+                outline: none;
+            }
+        """)
         if is_sel:
-            badge = QPushButton("Active"); badge.setObjectName("ModelActiveBadge")
-            badge.setIcon(_svg_icon("check", "#ffffff", 12)); badge.setIconSize(QSize(12, 12))
-            badge.setEnabled(False); badge.setFixedHeight(25); rl.addWidget(badge)
+            active_btn.setIcon(_get_active_icon(True, 20))
+            active_btn.setToolTip("Active (current)")
+            # No click handler — already active
         else:
-            sa = QPushButton("Set Active"); sa.setObjectName("MiniAction")
-            sa.setIcon(_svg_icon("arrow_right", "#1b5e20", 12)); sa.setIconSize(QSize(12, 12))
-            sa.setFixedHeight(25)
-            sa.clicked.connect(lambda _, m=model_id: self._set_active_model(m))
-            rl.addWidget(sa)
+            active_btn.setIcon(_get_active_icon(False, 20))
+            active_btn.setToolTip("Set Active")
+            active_btn.clicked.connect(lambda _, m=model_id: self._set_active_model(m))
+        top_row.addWidget(active_btn)
 
-        # Test button — play icon
-        test_btn = QPushButton("Test"); test_btn.setObjectName("ModelTestBtn")
-        test_btn.setIcon(_svg_icon("play", "#ffffff", 12)); test_btn.setIconSize(QSize(12, 12))
-        test_btn.setFixedHeight(25)
+        # 2. Test Button (26x26, flat, invisible/empty until hovered)
+        test_btn = QPushButton()
+        test_btn.setObjectName("ModelTestBtn")
+        test_btn.setFixedSize(26, 26)
+        test_btn.setIconSize(QSize(20, 20))
+        test_btn.setFlat(True)
+        test_btn.setStyleSheet("""
+            QPushButton { background: transparent; border: none; outline: none; padding: 0px; }
+            QPushButton:hover { background: transparent; border: none; }
+            QPushButton:pressed { background: transparent; border: none; }
+            QPushButton:focus { background: transparent; border: none; outline: none; }
+        """)
+        test_btn.setIcon(QIcon())
+        test_btn.setToolTip("")
         test_btn.clicked.connect(lambda _, m=model_id: self._run_test(m))
-        rl.addWidget(test_btn)
+        top_row.addWidget(test_btn)
         self._test_btns[model_id] = test_btn
 
-        # Trash icon
-        del_btn = _icon_btn("trash", "Remove model", 25, "#c0392b", "DangerIcon")
+        # 3. Delete Button (26x26, flat, delete.png icon)
+        del_btn = QPushButton()
+        del_btn.setObjectName("DangerIcon")
+        del_btn.setFixedSize(26, 26)
+        del_btn.setIconSize(QSize(20, 20))
+        del_btn.setFlat(True)
+        del_btn.setStyleSheet("""
+            QPushButton { background: transparent; border: none; outline: none; padding: 0px; }
+            QPushButton:hover { background: transparent; border: none; }
+            QPushButton:pressed { background: transparent; border: none; }
+            QPushButton:focus { background: transparent; border: none; outline: none; }
+        """)
+        del_btn.setIcon(_svg_icon("trash", "#c0392b", 20))
         del_btn.setEnabled(total > 1)
+        del_btn.setToolTip("Remove model")
         del_btn.clicked.connect(lambda _, m=model_id: self._del_model(m))
-        rl.addWidget(del_btn)
+        top_row.addWidget(del_btn)
+
+        # ── Opacity effect on test button (fades in on hover, fades out on leave) ──
+        test_opacity = QGraphicsOpacityEffect(test_btn)
+        test_opacity.setOpacity(0.0)
+        test_btn.setGraphicsEffect(test_opacity)
+        self._test_opacity_effects[model_id] = test_opacity
+
+        main_layout.addLayout(top_row)
+
+        # ── Result label: starts collapsed (maxHeight=0), expands via animation ──
+        res_lbl = QLabel("")
+        res_lbl.setWordWrap(True)
+        res_lbl.setStyleSheet(
+            "border: none; background: transparent; font-size: 11px; "
+            "font-family: 'Comfortaa'; padding-top: 2px; padding-left: 2px;"
+        )
+        res_lbl.setMaximumHeight(0)    # collapsed by default — no hide(), uses layout height
+        main_layout.addWidget(res_lbl)
+        self._model_result_labels[model_id] = res_lbl
+
+        # Connect mouse hover events to the row container
+        row.enterEvent = lambda event, m=model_id: self._on_row_hover(m, True)
+        row.leaveEvent = lambda event, m=model_id: self._on_row_hover(m, False)
 
         self._models_container.addWidget(row)
 
     # ── helpers ───────────────────────────────────────────────────────────
 
-    def _toggle_eye(self) -> None:
-        self._key_revealed = not self._key_revealed
-        if self._key_revealed:
-            self._key_edit.setEchoMode(QLineEdit.Normal)
-            self._eye_action.setIcon(_svg_icon("eye_off", "#1b5e20", 16))
-        else:
-            self._key_edit.setEchoMode(QLineEdit.Password)
-            self._eye_action.setIcon(_svg_icon("eye", "#1b5e20", 16))
+    def _animate_opacity(self, model_id: str, to_opacity: float, duration: int = 160) -> None:
+        """Smoothly fade the test button's opacity effect to `to_opacity`."""
+        eff = self._test_opacity_effects.get(model_id)
+        if not eff:
+            return
+        anim = QVariantAnimation(self)
+        anim.setStartValue(eff.opacity())
+        anim.setEndValue(to_opacity)
+        anim.setDuration(duration)
+        anim.setEasingCurve(QEasingCurve.OutCubic)
+        anim.valueChanged.connect(lambda v, e=eff: e.setOpacity(float(v)))
+        anim.start(QVariantAnimation.DeleteWhenStopped)
+
+    def _animate_result_label(self, model_id: str, expand: bool) -> None:
+        """Slide the result label open (expand=True) or shut (expand=False)."""
+        lbl = self._model_result_labels.get(model_id)
+        if not lbl:
+            return
+        lbl.setMaximumHeight(16777215)          # unlock so sizeHint is computed
+        target_h = lbl.sizeHint().height() + 6 if expand else 0
+        lbl.setMaximumHeight(lbl.height())      # re-lock at current height for smooth start
+
+        anim = self._row_anims.get(model_id)
+        if anim:
+            try:
+                if anim.state() == QPropertyAnimation.Running:
+                    anim.stop()
+            except RuntimeError:
+                pass
+
+        anim = QPropertyAnimation(lbl, b"maximumHeight", self)
+        anim.setDuration(220)
+        anim.setStartValue(lbl.maximumHeight())
+        anim.setEndValue(target_h)
+        anim.setEasingCurve(QEasingCurve.OutCubic)
+        self._row_anims[model_id] = anim
+        anim.start()
+
+    def _on_row_hover(self, model_id: str, hover: bool) -> None:
+        """Fade-in or fade-out the test (play) button icon on row hover."""
+        if model_id in self._active_test_models:
+            return
+        btn = self._test_btns.get(model_id)
+        if btn:
+            if hover:
+                btn.setIcon(_svg_icon("play", "#1b5e20", 20))
+                btn.setToolTip("Test Connection")
+                self._animate_opacity(model_id, 1.0, 160)
+            else:
+                self._animate_opacity(model_id, 0.0, 200)
+                # Clear the icon after fade completes
+                QTimer.singleShot(210, lambda b=btn: b.setIcon(QIcon()) if not b.underMouse() else None)
+                btn.setToolTip("")
+
+    @staticmethod
+    def _mask_key(key: str) -> str:
+        """Show first 3 + '•••••' + last 3 chars of an API key."""
+        if len(key) <= 8:
+            return "•" * len(key)
+        return key[:3] + "  •••••••  " + key[-3:]
+
+    def _commit_key(self) -> None:
+        """Called on editingFinished — save the new raw key and switch back to masked display."""
+        if self._key_edit.isReadOnly():
+            return          # masked display mode, nothing to commit
+        raw = self._key_edit.text().strip()
+        if raw:
+            self._store.update_key_space(self._space_name, api_key=raw)
+            # Switch back to masked read-only display
+            self._key_edit.setText(self._mask_key(raw))
+            self._key_edit.setReadOnly(True)
 
     def _save_key(self) -> None:
-        self._store.update_key_space(self._space_name, api_key=self._key_edit.text().strip())
-        self._set_status("API key saved.", ok=True)
+        """Legacy stub — kept so existing signals don't break."""
+        self._commit_key()
 
     def _set_active_model(self, model_id: str) -> None:
+        self._store.set_active_key_space_name(self._space_name)
         self._store.update_key_space(self._space_name, selected_model=model_id)
         self.profile_changed.emit()
 
@@ -791,102 +987,150 @@ class ProfileCardWidget(QFrame):
     def _add_model(self) -> None:
         mid = self._add_edit.text().strip()
         if not mid:
-            self._set_status("Please enter a model ID first.", ok=False); return
+            show_themed_warning(self, "Missing Model ID", "Please enter a model ID first.")
+            return
         self._store.add_model_to_space(self._space_name, mid)
         self._add_edit.clear(); self.profile_changed.emit()
-
-    def _set_status(self, text: str, ok: bool | None = None) -> None:
-        self._status_lbl.setText(text)
-        if ok is True:
-            self._status_frame.setStyleSheet(
-                "QFrame{background:#e8f8e8;border:2px solid #0a0a0a;border-radius:14px;}")
-            self._status_lbl.setStyleSheet(
-                "border:none;background:transparent;color:#1b5e20;"
-                "font-size:11px;font-weight:700;font-family:'Comfortaa';")
-        elif ok is False:
-            self._status_frame.setStyleSheet(
-                "QFrame{background:#fde8e8;border:2px solid #0a0a0a;border-radius:14px;}")
-            self._status_lbl.setStyleSheet(
-                "border:none;background:transparent;color:#c0392b;"
-                "font-size:11px;font-weight:700;font-family:'Comfortaa';")
-        else:
-            self._status_frame.setStyleSheet(
-                "QFrame{background:#f4fff4;border:2px solid #0a0a0a;border-radius:14px;}")
-            self._status_lbl.setStyleSheet(
-                "border:none;background:transparent;color:#386038;"
-                "font-size:11px;font-weight:600;font-family:'Comfortaa';")
 
     # ── test flow ─────────────────────────────────────────────────────────
 
     def _animate_loading(self) -> None:
-        btn = self._test_btns.get(self._active_test_model or "")
-        if not btn:
-            return
-        frames = ["   ", ".  ", ".. ", "..."]
+        """Cycle dots inside the row's inline result label while testing is in progress."""
+        frames = ["", ".", "..", "..."]
         self._loading_dot_idx = (self._loading_dot_idx + 1) % len(frames)
-        btn.setText(f"Testing{frames[self._loading_dot_idx]}")
+        for mid in list(self._active_test_models):
+            lbl = self._model_result_labels.get(mid)
+            if lbl:
+                lbl.setStyleSheet("color: #1b5e20; border: none; background: transparent;")
+                lbl.setText(f"Connecting ({mid}){frames[self._loading_dot_idx]}")
+                self._animate_result_label(mid, True)
 
     def _run_test(self, model_id: str) -> None:
-        api_key = self._key_edit.text().strip()
-        if not api_key:
-            self._set_status("Error: Enter an API key above to test.", ok=False)
+        if model_id in self._active_test_models:
             return
 
-        # Animate the Test button
+        # Fetch the real raw API key (not the UI masked display string)
+        space = self._store.get_key_space(self._space_name) or self._space_data
+        api_key = str(space.get("api_key", "") or "").strip()
+        if not api_key or "•" in api_key:
+            txt = self._key_edit.text().strip()
+            if txt and "•" not in txt:
+                api_key = txt
+
+        if not api_key or "•" in api_key:
+            # Show a temporary inline warning directly in the row result
+            lbl = self._model_result_labels.get(model_id)
+            if lbl:
+                lbl.setStyleSheet("color: #c0392b; font-weight: 700; border: none; background: transparent;")
+                lbl.setText("Error: Enter a valid API key first.")
+                self._animate_result_label(model_id, True)
+                QTimer.singleShot(3000, lambda m=model_id: self._collapse_result(m))
+            return
+
+        # Lock test button opacity to 1 (visible) while testing
+        eff = self._test_opacity_effects.get(model_id)
+        if eff:
+            eff.setOpacity(1.0)
+
+        # Animate the Test button → loading spinner
         btn = self._test_btns.get(model_id)
         if btn:
             btn.setEnabled(False)
-            btn.setText("Testing   ")
-            btn.setIcon(_svg_icon("loading", "#ffffff", 12))
+            btn.setIcon(_svg_icon("loading", "#1b5e20", 20))
+            btn.setToolTip("Testing…")
 
         # Grey the row while in-flight
         row = self._model_row_frames.get(model_id)
         if row:
             row.setStyleSheet(
-                "QFrame{background:#f5f5f5;border:2px solid #aaa;border-radius:13px;}")
+                "QFrame{background:rgba(245,245,245,0.85);border:none;border-radius:13px;}")
 
-        self._active_test_model = model_id
-        self._loading_dot_idx = 0
-        self._loading_timer.start()
-        self._set_status(f"Connecting to OpenRouter  ({model_id})\u2026")
+        self._active_test_models.add(model_id)
+        if not self._loading_timer.isActive():
+            self._loading_dot_idx = 0
+            self._loading_timer.start()
 
-        self._test_thread = QThread()
-        self._test_worker = ReachabilityWorker(api_key, model_id)
-        self._test_worker.moveToThread(self._test_thread)
-        self._test_thread.started.connect(self._test_worker.run)
-        self._test_worker.finished.connect(self._on_result, Qt.QueuedConnection)
-        self._test_worker.finished.connect(self._test_thread.quit)
-        self._test_thread.finished.connect(self._test_worker.deleteLater)
-        self._test_thread.finished.connect(self._test_thread.deleteLater)
-        self._test_thread.start()
+        thread = QThread(self)
+        worker = ReachabilityWorker(api_key, model_id)
+        worker.moveToThread(thread)
 
-    @Slot(bool, str)
-    def _on_result(self, success: bool, message: str) -> None:
-        self._loading_timer.stop()
-        mid = self._active_test_model
-        self._active_test_model = None
+        self._test_threads[model_id] = thread
+        self._test_workers[model_id] = worker
+
+        thread.started.connect(worker.run)
+        worker.finished.connect(self._on_result, Qt.QueuedConnection)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+
+        def _cleanup(mid=model_id):
+            self._test_threads.pop(mid, None)
+            self._test_workers.pop(mid, None)
+
+        thread.finished.connect(_cleanup)
+        thread.start()
+
+    @Slot(str, bool, str)
+    def _on_result(self, model_id: str, success: bool, message: str) -> None:
+        self._active_test_models.discard(model_id)
+        if not self._active_test_models:
+            self._loading_timer.stop()
 
         # Restore Test button
-        btn = self._test_btns.get(mid or "")
+        btn = self._test_btns.get(model_id)
         if btn:
             btn.setEnabled(True)
-            btn.setText("Test")
-            btn.setIcon(_svg_icon("play", "#ffffff", 12))
+            row = self._model_row_frames.get(model_id)
+            if row and row.underMouse():
+                btn.setIcon(_svg_icon("play", "#1b5e20", 20))
+                btn.setToolTip("Test Connection")
+                self._animate_opacity(model_id, 1.0, 120)
+            else:
+                btn.setIcon(QIcon())
+                btn.setToolTip("")
+                self._animate_opacity(model_id, 0.0, 250)
 
-        # Colour the model row green or red
-        row = self._model_row_frames.get(mid or "")
+        # Colour the model row green or red (instant border, fades in via label)
+        row = self._model_row_frames.get(model_id)
         if row:
             if success:
                 row.setStyleSheet(
-                    "QFrame{background:#d4f8d4;border:2.5px solid #1b5e20;border-radius:13px;}")
+                    "QFrame{background:rgba(212,248,212,0.90);border:none;border-radius:13px;}")
             else:
                 row.setStyleSheet(
-                    "QFrame{background:#fdd8d8;border:2.5px solid #c0392b;border-radius:13px;}")
+                    "QFrame{background:rgba(253,216,216,0.90);border:none;border-radius:13px;}")
 
-        if success:
-            self._set_status(f"Reachable  \u2014  {message}", ok=True)
-        else:
-            self._set_status(f"Unreachable  \u2014  {message}", ok=False)
+        # Slide open the result label
+        res_lbl = self._model_result_labels.get(mid or "")
+        if res_lbl:
+            if success:
+                res_lbl.setStyleSheet("color: #1b5e20; font-weight: 700; border: none; background: transparent;")
+                res_lbl.setText(f"✓  {message}")
+            else:
+                res_lbl.setStyleSheet("color: #c0392b; font-weight: 700; border: none; background: transparent;")
+                res_lbl.setText(f"✗  {message}")
+            self._animate_result_label(mid or "", True)
+
+            # Schedule auto-collapse after 3 seconds
+            QTimer.singleShot(3000, lambda m=mid: self._collapse_result(m))
+
+    def _collapse_result(self, model_id: str | None) -> None:
+        """Animate the result label closed and restore row color."""
+        if not model_id:
+            return
+        self._animate_result_label(model_id, False)
+
+        row = self._model_row_frames.get(model_id)
+        if row:
+            models = list(self._space_data.get("models", []))
+            selected = str(self._space_data.get("selected_model", models[0] if models else ""))
+            is_active = (model_id == selected)
+            if is_active:
+                row.setStyleSheet(
+                    "QFrame{background:rgba(237,250,237,0.85);border:none;border-radius:13px;}")
+            else:
+                row.setStyleSheet(
+                    "QFrame{background:rgba(255,255,255,0.55);border:none;border-radius:13px;}")
 
 
 # ---------------------------------------------------------------------------
@@ -894,13 +1138,16 @@ class ProfileCardWidget(QFrame):
 # ---------------------------------------------------------------------------
 
 class NewProfileCardWidget(QFrame):
-    created = Signal()
+    created = Signal(str)
 
     def __init__(self, tag_store: TagStore, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._store = tag_store
         self._is_expanded = False
         self.setObjectName("NewProfileCard")
+        self.setStyleSheet(
+            "QFrame#NewProfileCard{background:rgba(255,255,255,0.70);border:2px solid #0a0a0a;border-radius:20px;}"
+        )
 
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(14, 12, 14, 12)
@@ -937,23 +1184,49 @@ class NewProfileCardWidget(QFrame):
         cancel.setFixedHeight(34); cancel.clicked.connect(self._collapse); br.addWidget(cancel)
         br.addStretch(1)
         create = QPushButton("Create Profile"); create.setObjectName("Primary")
+        create.setStyleSheet("color: #000000; font-weight: bold;")
         create.setFixedHeight(34)
-        create.setIcon(_svg_icon("add_profile", "#ffffff", 14)); create.setIconSize(QSize(14, 14))
+        create.setIcon(_svg_icon("add_profile", "#000000", 14)); create.setIconSize(QSize(14, 14))
         create.clicked.connect(self._create); br.addWidget(create)
         fl.addLayout(br)
 
         self._layout.addWidget(self._form)
-        self._form.hide()
+        self._form.setMaximumHeight(0)   # collapsed by default
+
+        self._form_anim: QPropertyAnimation | None = None
+
+    def _animate_form(self, expand: bool) -> None:
+        """Slide the form in (expand=True) or out (expand=False) by animating maximumHeight."""
+        self._form.setMaximumHeight(16777215)
+        target = self._form.sizeHint().height() + 12 if expand else 0
+        self._form.setMaximumHeight(self._form.height())
+
+        if self._form_anim:
+            try:
+                if self._form_anim.state() == QPropertyAnimation.Running:
+                    self._form_anim.stop()
+            except RuntimeError:
+                pass
+
+        self._form_anim = QPropertyAnimation(self._form, b"maximumHeight", self)
+        self._form_anim.setDuration(260)
+        self._form_anim.setStartValue(self._form.maximumHeight())
+        self._form_anim.setEndValue(target)
+        self._form_anim.setEasingCurve(QEasingCurve.OutCubic)
+        self._form_anim.start()
 
     def _expand(self) -> None:
         self._is_expanded = True
         self._open_btn.hide()
         self._name_edit.clear(); self._key_edit.clear(); self._err_lbl.setText("")
-        self._form.show(); self._name_edit.setFocus()
+        self._form.setMaximumHeight(0)   # reset before animating open
+        self._animate_form(True)
+        QTimer.singleShot(50, self._name_edit.setFocus)
 
     def _collapse(self) -> None:
         self._is_expanded = False
-        self._form.hide(); self._open_btn.show()
+        self._animate_form(False)
+        QTimer.singleShot(270, lambda: self._open_btn.show())
 
     def _create(self) -> None:
         name = self._name_edit.text().strip()
@@ -964,7 +1237,8 @@ class NewProfileCardWidget(QFrame):
             self._err_lbl.setStyleSheet("color:#c0392b;font-weight:700;font-family:'Comfortaa';font-size:11px;")
             self._err_lbl.setText(f'Profile "{name}" already exists.'); return
         self._store.add_key_space(name, api_key=self._key_edit.text().strip())
-        self._collapse(); self.created.emit()
+        self._collapse()
+        self.created.emit(name)
 
 
 # ---------------------------------------------------------------------------
@@ -989,7 +1263,7 @@ class AIModelPage(QWidget):
         scroll.setWidget(self._content); outer.addWidget(scroll)
         self.reload()
 
-    def reload(self) -> None:
+    def reload(self, animate_space: str | None = None) -> None:
         while self._layout.count():
             it = self._layout.takeAt(0)
             if it.widget(): it.widget().deleteLater()
@@ -1009,8 +1283,21 @@ class AIModelPage(QWidget):
             card.delete_space_requested.connect(self._delete_space)
             self._layout.addWidget(card)
 
+            if animate_space and name == animate_space:
+                eff = QGraphicsOpacityEffect(card)
+                eff.setOpacity(0.0)
+                card.setGraphicsEffect(eff)
+
+                anim_o = QVariantAnimation(self)
+                anim_o.setDuration(350)
+                anim_o.setStartValue(0.0)
+                anim_o.setEndValue(1.0)
+                anim_o.setEasingCurve(QEasingCurve.OutCubic)
+                anim_o.valueChanged.connect(lambda v, e=eff: e.setOpacity(float(v)))
+                anim_o.start(QVariantAnimation.DeleteWhenStopped)
+
         new_card = NewProfileCardWidget(self._store)
-        new_card.created.connect(self.reload)
+        new_card.created.connect(lambda space_name="": self.reload(animate_space=space_name))
         self._layout.addWidget(new_card)
         self._layout.addStretch(1)
 
@@ -1074,20 +1361,15 @@ class AboutPage(QWidget):
 
         for i, (num, name, desc) in enumerate(self.STEPS):
             sf = QFrame(); sf.setObjectName("AboutStepCard")
-            sfl = QHBoxLayout(sf); sfl.setContentsMargins(14, 10, 14, 10); sfl.setSpacing(12)
+            sfl = QHBoxLayout(sf); sfl.setContentsMargins(14, 8, 14, 8); sfl.setSpacing(12)
             ico = QLabel(num); ico.setFixedSize(36, 36); ico.setAlignment(Qt.AlignCenter)
             ico.setStyleSheet("background:#2e7d32;color:#fff;border-radius:18px;"
                               "font-size:14px;font-weight:700;border:2px solid #0a0a0a;")
             sfl.addWidget(ico)
-            tc = QVBoxLayout(); tc.setSpacing(2)
-            tc.addWidget(QLabel(f"Step {num}  •  {name}", objectName="AboutStepLabel"))
-            dl = QLabel(desc); dl.setObjectName("AboutStepDesc"); dl.setWordWrap(True)
-            tc.addWidget(dl); sfl.addLayout(tc, 1)
+            step_lbl = QLabel(f"Step {num}  •  {name}")
+            step_lbl.setObjectName("AboutStepLabel")
+            sfl.addWidget(step_lbl, 1)
             pl.addWidget(sf); self._frames.append(sf)
-            if i < len(self.STEPS) - 1:
-                arr = QLabel("↓"); arr.setAlignment(Qt.AlignHCenter)
-                arr.setStyleSheet("color:#2e7d32;font-size:14px;font-weight:700;")
-                pl.addWidget(arr)
         cl.addWidget(pc)
 
         # Tips
@@ -1243,8 +1525,13 @@ class SettingsWindow(QDialog):
         body = QHBoxLayout(); body.setSpacing(14)
         self._sidebar = QListWidget(); self._sidebar.setObjectName("Sidebar")
         self._sidebar.setFixedWidth(160)
+        sidebar_font = QFont("Playwrite US Modern", 11, QFont.Bold)
+        sidebar_font.setFamilies(["Playwrite US Modern", "Playwrite US Trad", "Playwrite US", "Playwrite", "Comfortaa", "sans-serif"])
+        self._sidebar.setFont(sidebar_font)
         for label, _ in self.PAGES:
-            self._sidebar.addItem(QListWidgetItem(label))
+            item = QListWidgetItem(label)
+            item.setFont(sidebar_font)
+            self._sidebar.addItem(item)
         body.addWidget(self._sidebar)
 
         self._stack = QStackedWidget()

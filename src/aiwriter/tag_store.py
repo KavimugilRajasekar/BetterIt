@@ -243,8 +243,8 @@ class TagStore:
         if any(s.get("name", "").lower() == name.lower() for s in self.get_key_spaces()):
             return False
         
-        models_list = list(models) if models else list(DEFAULT_MODELS)
-        sel_model = selected_model if selected_model in models_list else (models_list[0] if models_list else "openai/gpt-4o-mini")
+        models_list = list(models) if models is not None else []
+        sel_model = selected_model if selected_model in models_list else (models_list[0] if models_list else "")
         
         new_space = {
             "name": name,
