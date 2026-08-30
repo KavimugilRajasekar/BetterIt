@@ -8,6 +8,7 @@ spacious cards, rounded interactive controls, animated pipeline, and themed popu
 from __future__ import annotations
 
 import os
+import math
 from pathlib import Path
 from . import get_resource_path
 from typing import Any, Optional
@@ -560,7 +561,7 @@ class ExpandOverlay(QFrame):
 def _get_active_icon(colored: bool, size: int = 18) -> QIcon:
     """Load active.png (colored) or not_active.png (inactive) as a QIcon."""
     asset = "active.png" if colored else "not_active.png"
-    path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "assets", asset))
+    path = get_resource_path(os.path.join("assets", asset))
 
     # Fallback: if asset missing, fall back to the other one or SVG
     if not os.path.exists(path):
@@ -1932,9 +1933,9 @@ class PencilLoaderWidget(QWidget):
         self._timer.timeout.connect(self._advance_angle)
 
         # Load pencil image
-        pencil_path = Path(__file__).resolve().parent.parent.parent / "assets" / "pencil.png"
-        if pencil_path.exists():
-            self._pencil_pixmap = QPixmap(str(pencil_path)).scaled(
+        pencil_path = get_resource_path("assets/pencil.png")
+        if os.path.exists(pencil_path):
+            self._pencil_pixmap = QPixmap(pencil_path).scaled(
                 QSize(30, 30), Qt.KeepAspectRatio, Qt.SmoothTransformation
             )
         else:
@@ -2005,17 +2006,29 @@ class PencilLoaderWidget(QWidget):
                 py = (self.height() - self._pencil_pixmap.height()) // 2
                 painter.drawPixmap(px, py, self._pencil_pixmap)
 
-            # Draw the loading border
+            # Draw the loading dots
             if self._state == self.LOADING:
-                pen_track = QPen(QColor("#a8d5a8"), 3)
-                painter.setPen(pen_track)
-                painter.drawEllipse(4, 4, self.width() - 8, self.height() - 8)
+                # No border circle drawn here
 
-                pen_arc = QPen(QColor("#1b5e20"), 4)
-                painter.setPen(pen_arc)
-                start = self._angle * 16
-                span = 280 * 16 # Approx 280 degrees
-                painter.drawArc(4, 4, self.width() - 8, self.height() - 8, start, span)
+                # Single circulating dot
+                num_dots = 1
+                radius = (min(self.width(), self.height()) // 2) - 4
+                cx, cy = self.width() // 2, self.height() // 2
+
+                for i in range(num_dots):
+                    angle_deg = (self._angle + (i * 360 / num_dots)) % 360
+                    angle_rad = math.radians(angle_deg)
+
+                    dx = radius * math.cos(angle_rad)
+                    dy = radius * math.sin(angle_rad)
+
+                    # Color changes in a smooth gradient manner based on rotation angle
+                    hue = self._angle # Use angle (0-359) as the hue
+                    dot_color = QColor.fromHsv(hue, 180, 255) # S=180, V=255 for vibrant colors
+
+                    painter.setPen(QPen(dot_color, 4))
+                    painter.setBrush(QBrush(dot_color))
+                    painter.drawEllipse(int(cx + dx - 2), int(cy + dy - 2), 4, 4)
 
         painter.end()
 

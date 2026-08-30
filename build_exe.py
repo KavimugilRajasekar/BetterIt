@@ -18,6 +18,10 @@ def build_executable():
         "--noconfirm",
         "--onefile",
         "--windowed",
+        "--name", "BetterIt",
+        "--exclude", "PyQt5",
+        "--exclude", "PyQt5-Qt5",
+        "--exclude", "PyQt5_sip",
         "--paths", "src",
         "--icon", "assets/pencil.png",
     ]
@@ -43,7 +47,7 @@ def build_executable():
         result = subprocess.run(command, check=True, text=True)
         print("\n" + "="*40)
         print("Build completed successfully!")
-        print(f"Executable available at: {os.path.join('dist', 'run.exe')}")
+        print(f"Executable available at: {os.path.join('dist', 'BetterIt.exe')}")
         print("="*40)
     except subprocess.CalledProcessError as e:
         print(f"\nBuild failed with error: {e}")
