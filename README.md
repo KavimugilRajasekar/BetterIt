@@ -42,6 +42,8 @@ The application runs in the background with a tray icon. To exit, right-click th
 
 ## Application Pipeline
 
+![Application Flow](public/flow_doc.png)
+
 The application operates in a linear pipeline:
 
 1. Trigger: The system monitors for the Ctrl+Space hotkey.

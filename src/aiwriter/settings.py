@@ -1719,19 +1719,8 @@ class AIModelPage(QWidget):
 # ---------------------------------------------------------------------------
 
 class AboutPage(QWidget):
-    STEPS = [
-        ("1", "Select Text",       "Highlight any text in any app, browser, or chat window."),
-        ("2", "Press Ctrl+Space",  "The BetterIt window opens instantly with your transformation tags."),
-        ("3", "Pick a Tag",        "Choose a preset or your own custom tag — Professional, LinkedIn, Chat, etc."),
-        ("4", "Polish with AI",    "Click Polish (Ctrl+Enter). OpenRouter AI rewrites per the tag's instructions."),
-        ("5", "Copy or Replace",   "Copy the improved text, or hit Replace to paste it back into your app."),
-        ("6", "Configure Anytime", "Open Settings to create tags, manage API key profiles, and test models."),
-    ]
-
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._active = 0
-        self._frames: list[QFrame] = []
 
         outer = QVBoxLayout(self); outer.setContentsMargins(0, 0, 0, 0)
         scroll = QScrollArea(); scroll.setWidgetResizable(True)
@@ -1762,20 +1751,19 @@ class AboutPage(QWidget):
         ph = QHBoxLayout()
         ph.addWidget(QLabel("Execution Pipeline", objectName="SectionLabel"))
         ph.addStretch(1)
-        ph.addWidget(QLabel("Live Pipeline", objectName="AboutVersion"))
         pl.addLayout(ph)
 
-        for i, (num, name, desc) in enumerate(self.STEPS):
-            sf = QFrame(); sf.setObjectName("AboutStepCard")
-            sfl = QHBoxLayout(sf); sfl.setContentsMargins(14, 8, 14, 8); sfl.setSpacing(12)
-            ico = QLabel(num); ico.setFixedSize(36, 36); ico.setAlignment(Qt.AlignCenter)
-            ico.setStyleSheet("background:#2e7d32;color:#fff;border-radius:18px;"
-                              "font-size:14px;font-weight:700;border:2px solid #0a0a0a;")
-            sfl.addWidget(ico)
-            step_lbl = QLabel(f"Step {num}  •  {name}")
-            step_lbl.setObjectName("AboutStepLabel")
-            sfl.addWidget(step_lbl, 1)
-            pl.addWidget(sf); self._frames.append(sf)
+        # Flow Image
+        flow_img_path = get_resource_path("assets/flow_app.png")
+        flow_lbl = QLabel()
+        if os.path.exists(flow_img_path):
+            pix = QPixmap(flow_img_path)
+            scaled_pix = pix.scaledToWidth(500, Qt.SmoothTransformation)
+            flow_lbl.setPixmap(scaled_pix)
+        else:
+            flow_lbl.setText("Flow image not found")
+        flow_lbl.setAlignment(Qt.AlignCenter)
+        pl.addWidget(flow_lbl)
         cl.addWidget(pc)
 
         # Tips
@@ -1796,20 +1784,6 @@ class AboutPage(QWidget):
             rw.addWidget(tl2, 1); tl.addLayout(rw)
         cl.addWidget(tc2); cl.addStretch(1)
         scroll.setWidget(content); outer.addWidget(scroll)
-
-        self._timer = QTimer(self); self._timer.setInterval(2200)
-        self._timer.timeout.connect(self._step); self._timer.start()
-        self._highlight()
-
-    def _step(self):
-        self._active = (self._active + 1) % len(self._frames); self._highlight()
-
-    def _highlight(self):
-        for i, f in enumerate(self._frames):
-            if i == self._active:
-                f.setStyleSheet("background:rgba(220,250,220,.98);border:2.5px solid #1b5e20;border-radius:18px;")
-            else:
-                f.setStyleSheet("background:rgba(255,255,255,.75);border:1.5px solid rgba(10,10,10,.3);border-radius:18px;")
 
 
 # ---------------------------------------------------------------------------
