@@ -1,95 +1,81 @@
-# AI Writer
+# Better It
 
-A small system-wide writing assistant for Windows. Select text in any app, hit **Ctrl+Space**, and a tiny floating window opens with a grammar-corrected version. Click **Replace** to paste it back.
+A system-wide writing assistant for Windows. Select text in any application, press Ctrl+Space, and a floating window opens with a grammar-corrected version. Click Replace to paste it back.
 
-This is v1: clipboard-based, one action (Grammar), powered by the OpenAI API. No live text sync, no streaming, no per-app integrations — just the smallest honest end-to-end slice.
+## Demo
 
-## Install
+<video src="public/demo.mp4" controls width="600"></video>
+
+## Installation
 
 ```bash
-cd Make-It-Better
 python -m venv .venv
 .venv\Scripts\activate
 pip install -e .
 ```
 
-If `pip install -e .` complains about the `keyboard` library on Windows, try running your terminal as Administrator (the library uses a low-level keyboard hook).
+If pip install -e . fails due to the keyboard library on Windows, run the terminal as Administrator.
 
-## Configure
+## Configuration
 
 ```bash
 copy .env.example .env
 ```
 
-Then edit `.env` and set your `OPENAI_API_KEY`. Optional: change `MODEL` or `HOTKEY`.
+Edit .env to set your OPENAI_API_KEY. You may also modify MODEL or HOTKEY.
 
-## Run
+## Execution
 
 ```bash
 python run.py
 ```
 
-The app starts in the background. There's no main window — just a tray icon. To quit, right-click the tray icon and choose **Quit**.
+The application runs in the background with a tray icon. To exit, right-click the tray icon and select Quit.
 
-## Use
+## Usage
 
-1. Type or paste text into any application (Notepad, Chrome, VS Code, Discord, Word, WhatsApp, etc.).
-2. Select the text you want corrected.
-3. Press **Ctrl+Space**. A small dark window appears centered on screen, showing your selected text. The original application keeps focus.
-4. Click **Correct Grammar**. A spinner shows briefly, then the corrected text appears in the "Improved" pane.
-5. Click **Replace**. The window hides and the corrected text is pasted into the original application.
-6. Press **Esc** to dismiss the window without pasting.
+1. Select text in any application.
+2. Press Ctrl+Space.
+3. Click Correct Grammar.
+4. Click Replace to paste the improved text.
+5. Press Esc to dismiss the window.
 
-## How it works
+## Application Pipeline
 
-```
-[any app] --select text--> Ctrl+Space
-                              |
-                              v
-                       +-------------+
-                       | read clip   |  (simulates Ctrl+C, then reads)
-                       +------+------+
-                              |
-                              v
-                       +-------------+
-                       |  OpenAI LLM |  (gpt-4o-mini, grammar prompt)
-                       +------+------+
-                              |
-                              v
-                       +-------------+
-                       |  show in UI |  (always-on-top floating window)
-                       +------+------+
-                              |
-                       click Replace
-                              |
-                              v
-                       +-------------+
-                       |  paste back |  (sets clipboard, focuses source hwnd, simulates Ctrl+V)
-                       +-------------+
-```
+The application operates in a linear pipeline:
 
-## Known limitations
+1. Trigger: The system monitors for the Ctrl+Space hotkey.
+2. Extraction: Upon trigger, the application simulates a Ctrl+C command to capture the currently selected text from the active window.
+3. Processing: The captured text is transmitted to the LLM API with a specific grammar correction prompt.
+4. Presentation: The resulting text is rendered in an always-on-top floating window for user review.
+5. Integration: Upon clicking Replace, the application sets the system clipboard to the new text and simulates a Ctrl+V command to insert it into the original application.
 
-- **Won't work everywhere.** Apps that block programmatic copy of selected text (some terminals, some games) won't feed text to the assistant.
-- **Alt-tabbing between trigger and Replace** can cause the paste to land in the wrong app. The assistant captures the foreground window's handle at trigger time, but if you switch apps, that handle is stale.
-- **Single monitor assumed** for window centering.
-- **No streaming** — the UI waits for the full response.
-- **Windows only.** macOS and Linux would need a different `clipboard.py` (different `keybd_event` and clipboard APIs).
+## Known Limitations
 
-## What's not in v1
+- Certain applications that block programmatic clipboard access may not work.
+- Switching active windows between trigger and replacement can cause the paste to land in the wrong application.
+- Centering is optimized for single-monitor setups.
+- Responses are not streamed; the UI waits for the full API response.
+- Windows only.
 
-- Live text sync ("auto-reflect as I type" from any input field)
-- More actions (Improve, Formal, Casual, Shorten, Expand, Translate, etc.)
-- Local LLM (Ollama)
-- OS accessibility / UI Automation for direct text replacement
-- Streaming responses, history, custom prompts, settings UI, autostart
-- Dark/light theme toggle
-- macOS / Linux support
+## Future Roadmap
 
-See the plan at `.claude/plans/` for the full phase-by-phase roadmap.
+- Live text synchronization.
+- Additional actions such as Formal, Casual, Shorten, and Expand.
+- Local LLM integration via Ollama.
+- OS accessibility and UI Automation for direct replacement.
+- Settings UI and autostart capabilities.
+- Theme toggles.
+- Cross-platform support for macOS and Linux.
 
 ## Troubleshooting
 
-- **Window doesn't appear on Ctrl+Space**: try running as Administrator, or check that another app (some games, some VMs) isn't capturing the hotkey.
-- **"Improved" pane shows an error**: check your API key in `.env` and your internet connection. Errors are shown verbatim.
-- **Replace doesn't paste**: some apps (notably some Electron apps with custom text fields) ignore simulated Ctrl+V. v1 accepts this.
+- Hotkey not working: Run as Administrator or check for hotkey conflicts.
+- API Errors: Verify API key and internet connectivity.
+- Paste failure: Some Electron applications may ignore simulated Ctrl+V.
+
+## Collaboration
+
+We welcome contributions. Please refer to the following files for more information:
+- [Contributing Guidelines](CONTRIBUTING.md)
+- [Code of Conduct](CODE_OF_CONDUCT.md)
