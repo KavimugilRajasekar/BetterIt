@@ -60,52 +60,6 @@ function Write-Failure {
     Write-Host "  [ERROR] $Message" -ForegroundColor Red
 }
 
-function Show-Spinner {
-    param(
-        [string]$Message,
-        [scriptblock]$Action
-    )
-
-    $frames = @(
-        "⠋",
-        "⠙",
-        "⠹",
-        "⠸",
-        "⠼",
-        "⠴",
-        "⠦",
-        "⠧",
-        "⠇",
-        "⠏"
-    )
-
-    $job = Start-Job -ScriptBlock $Action
-
-    $i = 0
-
-    while ($job.State -eq "Running") {
-        Write-Host "`r  $($frames[$i % $frames.Count]) $Message   " -NoNewline -ForegroundColor Cyan
-
-        $i++
-        Start-Sleep -Milliseconds 100
-    }
-
-    Write-Host "`r  " + (" " * ($Message.Length + 8)) -NoNewline
-    Write-Host "`r" -NoNewline
-
-    $result = Receive-Job $job -ErrorAction SilentlyContinue
-    $jobState = $job.State
-    $jobError = $job.ChildJobs[0].JobStateInfo.Reason
-
-    Remove-Job $job -Force -ErrorAction SilentlyContinue
-
-    if ($jobState -eq "Failed") {
-        throw $jobError
-    }
-
-    return $result
-}
-
 # ============================================================
 # Start
 # ============================================================
@@ -124,9 +78,7 @@ try {
 
     $principal = New-Object Security.Principal.WindowsPrincipal($currentIdentity)
 
-    if (-not $principal.IsInRole(
-        [Security.Principal.WindowsBuiltInRole]::Administrator
-    )) {
+    if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
         throw "Administrator privileges are required."
     }
 
@@ -151,10 +103,7 @@ try {
         "Accept"     = "application/vnd.github+json"
     }
 
-    $Release = Invoke-RestMethod `
-        -Uri $ApiUrl `
-        -Headers $headers `
-        -Method Get
+    $Release = Invoke-RestMethod -Uri $ApiUrl -Headers $headers -Method Get
 
     if (-not $Release) {
         throw "Unable to retrieve the latest BetterIt release."
@@ -180,6 +129,7 @@ try {
 
         # Fallback:
         # Search for an executable containing "BetterIt"
+
         $ExeAsset = $Release.assets |
             Where-Object {
                 $_.name -match "(?i)BetterIt.*\.exe$"
@@ -194,22 +144,74 @@ try {
     $DownloadUrl = $ExeAsset.browser_download_url
 
     # --------------------------------------------------------
-    # Download
+    # Download with animated progress
     # --------------------------------------------------------
 
     Write-Host ""
     Write-Host "  Downloading BetterIt $Version" -ForegroundColor Cyan
     Write-Host ""
 
-    $ProgressPreference = "SilentlyContinue"
+    $webClient = $null
 
-    Invoke-WebRequest `
-        -Uri $DownloadUrl `
-        -OutFile $TempExe `
-        -Headers $headers `
-        -UseBasicParsing
+    try {
 
-    $ProgressPreference = "Continue"
+        $webClient = New-Object System.Net.WebClient
+
+        $webClient.Headers.Add("User-Agent", "BetterIt-Installer")
+        $webClient.Headers.Add("Accept", "application/octet-stream")
+
+        $webClient.DownloadProgressChanged += {
+            param($sender, $e)
+
+            $percent = $e.ProgressPercentage
+
+            $downloadedMB = [math]::Round(
+                $e.BytesReceived / 1MB,
+                2
+            )
+
+            $totalMB = [math]::Round(
+                $e.TotalBytesToReceive / 1MB,
+                2
+            )
+
+            $barWidth = 36
+
+            $filled = [math]::Floor(
+                ($percent / 100) * $barWidth
+            )
+
+            $empty = $barWidth - $filled
+
+            $bar = ("█" * $filled) + ("░" * $empty)
+
+            $line = "  [$bar] $percent%  $downloadedMB MB / $totalMB MB"
+
+            Write-Host "`r$line" -NoNewline -ForegroundColor Cyan
+        }
+
+        $webClient.DownloadFile($DownloadUrl, $TempExe)
+
+        $webClient.Dispose()
+        $webClient = $null
+
+        Write-Host ""
+        Write-Host ""
+
+    }
+    catch {
+
+        if ($webClient) {
+            $webClient.Dispose()
+            $webClient = $null
+        }
+
+        throw "Failed to download BetterIt.exe: $($_.Exception.Message)"
+    }
+
+    # --------------------------------------------------------
+    # Verify downloaded file
+    # --------------------------------------------------------
 
     if (-not (Test-Path $TempExe)) {
         throw "BetterIt.exe could not be downloaded."
@@ -243,17 +245,16 @@ try {
     if (Test-Path $InstallDir) {
 
         # Remove everything inside BetterIt
+
         Get-ChildItem -Path $InstallDir -Force -ErrorAction SilentlyContinue |
             Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 
         # Remove the directory itself
+
         Remove-Item $InstallDir -Recurse -Force -ErrorAction SilentlyContinue
     }
 
-    New-Item `
-        -ItemType Directory `
-        -Path $InstallDir `
-        -Force | Out-Null
+    New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
 
     # --------------------------------------------------------
     # Install BetterIt.exe
@@ -263,10 +264,7 @@ try {
 
     $InstalledExe = Join-Path $InstallDir "BetterIt.exe"
 
-    Copy-Item `
-        -Path $TempExe `
-        -Destination $InstalledExe `
-        -Force
+    Copy-Item -Path $TempExe -Destination $InstalledExe -Force
 
     if (-not (Test-Path $InstalledExe)) {
         throw "BetterIt.exe could not be installed."
@@ -292,6 +290,7 @@ try {
     $Shortcut.WindowStyle = 1
 
     # Use the application's icon
+
     $Shortcut.IconLocation = "$InstalledExe,0"
 
     $Shortcut.Save()
@@ -326,9 +325,7 @@ try {
 
     Write-Step "Starting BetterIt..."
 
-    Start-Process `
-        -FilePath $InstalledExe `
-        -WorkingDirectory $InstallDir
+    Start-Process -FilePath $InstalledExe -WorkingDirectory $InstallDir
 
     # --------------------------------------------------------
     # Completion
@@ -358,9 +355,11 @@ try {
     Write-Host ""
     Write-Host "  BetterIt is now running in the background." -ForegroundColor Green
     Write-Host ""
+
     Write-Host "  Press " -NoNewline -ForegroundColor Gray
     Write-Host "Ctrl + Space" -NoNewline -ForegroundColor Cyan
     Write-Host " to open BetterIt's configuration." -ForegroundColor Gray
+
     Write-Host ""
 
     Write-Host "  Your application is all set." -ForegroundColor Green
@@ -370,6 +369,10 @@ try {
 
 }
 catch {
+
+    if ($webClient) {
+        $webClient.Dispose()
+    }
 
     $ProgressPreference = "Continue"
 
