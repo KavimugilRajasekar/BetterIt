@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from . import get_resource_path
 from typing import Any, Optional
 
 from PySide6.QtCore import (
@@ -205,7 +206,7 @@ def _load_png_icon(name: str, size: int) -> QIcon | None:
     """Load specific PNG assets cleanly, falling back to None if not found/applicable."""
     filename = "test.png" if name == "play" else "delete.png" if name == "trash" else None
     if filename:
-        path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "assets", filename))
+        path = get_resource_path(os.path.join("assets", filename))
         if os.path.exists(path):
             pixmap = QPixmap(path)
             return QIcon(pixmap.scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation))

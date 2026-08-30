@@ -67,7 +67,7 @@ class AIWriterApp(QObject):
         # Load bundled typography cleanly on start
         load_fonts()
 
-        self._window = FloatingWindow()
+        self._window = FloatingWindow(self._store)
         self._hotkey = GlobalHotkey(os.environ.get("HOTKEY", "ctrl+space"))
         self._worker: Optional[GrammarWorker] = None
         self._worker_thread: Optional[QThread] = None

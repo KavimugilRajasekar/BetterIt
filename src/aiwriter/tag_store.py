@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from . import get_resource_path
 from typing import Any
 
 DEFAULT_TAGS: dict[str, str] = {
@@ -69,9 +70,13 @@ class TagStore:
     """Loads/saves user-defined tags and general app settings."""
 
     def __init__(self) -> None:
-        self._dir = Path(__file__).resolve().parent
-        self._path = self._dir / "tags.json"
-        self._config_path = self._dir / "config.json"
+        # User data directory for persistence
+        self._user_dir = Path(os.environ.get("APPDATA", Path.home())).resolve() / "BetterIt"
+        self._user_dir.mkdir(parents=True, exist_ok=True)
+
+        self._path = self._user_dir / "tags.json"
+        self._config_path = self._user_dir / "config.json"
+
         self._tags: dict[str, str] = {}
         self._config: dict[str, Any] = {}
         self.load()
@@ -80,6 +85,7 @@ class TagStore:
     # -- Tag management ----------------------------------------------------
 
     def load(self) -> None:
+        # 1. Try loading from user directory
         if self._path.exists():
             try:
                 data = json.loads(self._path.read_text(encoding="utf-8"))
@@ -88,7 +94,20 @@ class TagStore:
                     return
             except (json.JSONDecodeError, OSError):
                 pass
-        # Fall back to defaults
+
+        # 2. Fallback: try loading bundled defaults
+        bundled_path = Path(get_resource_path("src/aiwriter/tags.json"))
+        if bundled_path.exists():
+            try:
+                data = json.loads(bundled_path.read_text(encoding="utf-8"))
+                if isinstance(data, dict) and data:
+                    self._tags = {str(k): str(v) for k, v in data.items()}
+                    self.save() # Copy defaults to user dir
+                    return
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        # 3. Absolute fallback to hardcoded defaults
         self._tags = dict(DEFAULT_TAGS)
         self.save()
 
@@ -133,24 +152,37 @@ class TagStore:
 
     def load_config(self) -> None:
         self._config = dict(DEFAULT_CONFIG)
+        # 1. Try loading from user directory
         if self._config_path.exists():
             try:
                 data = json.loads(self._config_path.read_text(encoding="utf-8"))
                 if isinstance(data, dict):
                     self._config.update(data)
+                    return
             except (json.JSONDecodeError, OSError):
                 pass
-        
-        # Ensure key_spaces is properly populated
+
+        # 2. Fallback: try loading bundled defaults
+        bundled_config_path = Path(get_resource_path("src/aiwriter/config.json"))
+        if bundled_config_path.exists():
+            try:
+                data = json.loads(bundled_config_path.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    self._config.update(data)
+                    self.save_config() # Copy defaults to user dir
+                    return
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        # Seed key_spaces if still empty/missing
         spaces = self._config.get("key_spaces")
         if not isinstance(spaces, list) or not spaces:
-            # Seed from existing single model or .env if available
             initial_key = os.environ.get("OPEN_ROUTER", "")
             initial_model = self._config.get("model") or os.environ.get("MODEL", "openai/gpt-4o-mini")
             models_list = list(DEFAULT_MODELS)
             if initial_model and initial_model not in models_list:
                 models_list.insert(0, initial_model)
-            
+
             self._config["key_spaces"] = [
                 {
                     "name": "Default Space",
@@ -160,7 +192,7 @@ class TagStore:
                 }
             ]
             self._config["active_key_space"] = "Default Space"
-        
+
         self.save_config()
 
     def save_config(self) -> None:

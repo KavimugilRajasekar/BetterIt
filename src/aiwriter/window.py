@@ -12,9 +12,11 @@ which has a side panel with "Edit Tag" and "Settings" sections.
 
 from __future__ import annotations
 
+import os
 import sys
 
 from pathlib import Path
+from . import get_resource_path
 
 from PySide6.QtCore import QPoint, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (
@@ -222,7 +224,7 @@ class FloatingWindow(QWidget):
     settings_opened = Signal()           # emitted when Settings window is shown
     settings_closed = Signal()           # emitted when Settings window is hidden/closed
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, tag_store: TagStore, parent: QWidget | None = None) -> None:
         super().__init__(parent, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setObjectName("FloatingWindow")
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)
@@ -230,7 +232,7 @@ class FloatingWindow(QWidget):
         self.setFixedSize(QSize(WINDOW_WIDTH, WINDOW_HEIGHT))
         self.setMask(self._rounded_mask(WINDOW_WIDTH, WINDOW_HEIGHT, CORNER_RADIUS))
 
-        self._tag_store = TagStore()
+        self._tag_store = tag_store
         self._settings_window: SettingsWindow | None = None
 
         # For dragging
@@ -284,12 +286,11 @@ class FloatingWindow(QWidget):
         title_row.addStretch(1)
 
         # Settings button (assets/settings_grey.png default, assets/settings.png on hover, no outer border, positioned just left of 'x')
-        assets_dir = Path(__file__).resolve().parent.parent.parent / "assets"
-        grey_path = assets_dir / "settings_grey.png"
-        color_path = assets_dir / "settings.png"
+        grey_path = get_resource_path("assets/settings_grey.png")
+        color_path = get_resource_path("assets/settings.png")
 
-        normal_icon = QIcon(str(grey_path)) if grey_path.exists() else QIcon()
-        hover_icon = QIcon(str(color_path)) if color_path.exists() else normal_icon
+        normal_icon = QIcon(grey_path) if os.path.exists(grey_path) else QIcon()
+        hover_icon = QIcon(color_path) if os.path.exists(color_path) else normal_icon
 
         self._settings_btn = HoverIconButton(normal_icon, hover_icon)
         self._settings_btn.setObjectName("HeaderSettingsBtn")
@@ -745,33 +746,23 @@ class FloatingWindow(QWidget):
 
 def load_fonts() -> None:
     """Load BetterIt's bundled fonts without requiring system installation."""
-    from pathlib import Path
-
-    base_dir = Path(__file__).resolve().parent
-    fonts_dir = base_dir / "fonts"
-    if not fonts_dir.exists():
-        # Check parent directories (e.g. project root)
-        alt_dir = base_dir.parent.parent / "fonts"
-        if alt_dir.exists():
-            fonts_dir = alt_dir
-
     font_files = [
-        fonts_dir / "Comfortaa" / "Comfortaa-VariableFont_wght.ttf",
-        fonts_dir / "Playwrite_US_Modern" / "PlaywriteUSModern.ttf",
+        get_resource_path("fonts/Comfortaa/Comfortaa-VariableFont_wght.ttf"),
+        get_resource_path("fonts/Playwrite_US_Modern/PlaywriteUSModern.ttf"),
     ]
 
-    comfortaa_static = fonts_dir / "Comfortaa" / "static" / "Comfortaa-Regular.ttf"
-    playwrite_static = fonts_dir / "Playwrite_US_Modern" / "static" / "PlaywriteUSModern-Regular.ttf"
+    comfortaa_static = get_resource_path("fonts/Comfortaa/static/Comfortaa-Regular.ttf")
+    playwrite_static = get_resource_path("fonts/Playwrite_US_Modern/static/PlaywriteUSModern-Regular.ttf")
 
-    if font_files[0].exists():
-        QFontDatabase.addApplicationFont(str(font_files[0]))
-    elif comfortaa_static.exists():
-        QFontDatabase.addApplicationFont(str(comfortaa_static))
+    if os.path.exists(font_files[0]):
+        QFontDatabase.addApplicationFont(font_files[0])
+    elif os.path.exists(comfortaa_static):
+        QFontDatabase.addApplicationFont(comfortaa_static)
 
-    if font_files[1].exists():
-        QFontDatabase.addApplicationFont(str(font_files[1]))
-    elif playwrite_static.exists():
-        QFontDatabase.addApplicationFont(str(playwrite_static))
+    if os.path.exists(font_files[1]):
+        QFontDatabase.addApplicationFont(font_files[1])
+    elif os.path.exists(playwrite_static):
+        QFontDatabase.addApplicationFont(playwrite_static)
 
 
 # --- Demo / Standalone runner -----------------------------------------------
