@@ -2039,11 +2039,9 @@ class SettingsWindow(QDialog):
         self._title = QLabel("Better It  •  Settings"); self._title.setObjectName("SettingsTitle")
         hdr.addWidget(self._title); hdr.addStretch(1)
 
-        self._return_btn = QPushButton()
+        self._return_btn = HoverIconButton(_svg_icon("return", "#000000", 16), _svg_icon("return", "#ffffff", 16))
         self._return_btn.setObjectName("MinimizeButton")
         self._return_btn.setFixedSize(30, 30)
-        self._return_btn.setIcon(_svg_icon("return", "#1b5e20", 16))
-        self._return_btn.setIconSize(QSize(16, 16))
         self._return_btn.setToolTip("Return to Better It")
         self._return_btn.clicked.connect(self._on_return_clicked)
         self._return_btn.hide()

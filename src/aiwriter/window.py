@@ -467,7 +467,7 @@ class FloatingWindow(QWidget):
         self._tag_combo.blockSignals(False)
         self._tag_combo._sync_scroll_state()
 
-    def open_settings(self, page: str = "Edit Tag") -> None:
+    def open_settings(self, page: str = "Edit Tag", show_return: bool = True) -> None:
         """Open Settings window (mutual exclusion: hides BetterIt window while Settings is open)."""
         if self._settings_window is None:
             self._settings_window = SettingsWindow(self._tag_store, initial_page=page)
@@ -478,8 +478,8 @@ class FloatingWindow(QWidget):
         else:
             self._settings_window.open_page(page)
 
-        # Show Return button because Settings was opened from BetterIt window
-        self._settings_window.set_return_visible(True)
+        # Show Return button if requested (e.g., opened from BetterIt window)
+        self._settings_window.set_return_visible(show_return)
 
         # Mutual exclusion: hide the BetterIt window while Settings is up
         self.hide()

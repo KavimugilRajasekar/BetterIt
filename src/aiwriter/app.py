@@ -141,7 +141,7 @@ class AIWriterApp(QObject):
 
         if not selected or not selected.strip():
             # Nothing was selected — open Settings panel directly instead of floating window
-            self._window.open_settings("Edit Tag")
+            self._window.open_settings("Edit Tag", show_return=False)
             return
 
         # --- Quick Replace mode ---
