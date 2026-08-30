@@ -275,43 +275,57 @@ class AIWriterApp(QObject):
     @Slot(str)
     def _on_qr_finished(self, corrected: str) -> None:
         """Quick Replace succeeded — paste result back silently."""
-        # Reset loader
-        if self._active_qr_loader:
-            if isinstance(self._active_qr_loader, TransientPencilLoader):
-                self._active_qr_loader.set_loading(False)
-                self._active_qr_loader.hide()
-            else:
-                self._window.set_settings_ball_loading(False)
-            self._active_qr_loader = None
-
         # Detect obviously garbled / unusable output (empty, or contains 'Jumple'
         # which indicates the LLM couldn't handle the text).
         stripped = corrected.strip()
         if not stripped or "jumple" in stripped.lower():
-            self._show_qr_error("Operation cannot be done because the AI returned an unusable response.")
+            # Pass a concise reason that reflects the "Jumbled Words" failure.
+            # _show_qr_error will handle the display and schedule the cleanup.
+            self._show_qr_error("AI returned jumbled words")
             return
-        QTimer.singleShot(80, lambda: self._do_qr_paste(corrected))
+
+        # Capture the loader to ensure we reset the correct one if a new request starts
+        loader = self._active_qr_loader
+        QTimer.singleShot(80, lambda: self._do_qr_paste(corrected, loader))
 
     @Slot(str)
     def _on_qr_failed(self, message: str) -> None:
         """Quick Replace LLM call failed — show a toast instead of the full window."""
         self._show_qr_error(message)
 
-    def _do_qr_paste(self, corrected: str) -> None:
+    def _do_qr_paste(self, corrected: str, loader: Optional[QWidget] = None) -> None:
         try:
             clipboard.focus_window(self._qr_hwnd)
             clipboard.paste_back(corrected)
+            # Success: clear the loader that was active for this request
+            self._clear_qr_loader(loader)
         except Exception as exc:
             self._show_qr_error(f"Could not paste: {exc}")
 
     def _show_qr_error(self, message: str) -> None:
-        """Show error in the active loader, or fallback to toast."""
+        """Show a concise error in the active loader, or fallback to toast."""
+        # 1. Clean up the message to be concise (avoid "Big Big full reasons")
+        # Remove redundant prefixes and technical dumps
+        clean_msg = message
+        if "OpenRouter API error" in clean_msg:
+            # Extract just the part after the colon if available
+            if ":" in clean_msg:
+                clean_msg = clean_msg.split(":", 1)[-1].strip()
+        elif "Unexpected response format" in clean_msg:
+            clean_msg = "API response error"
+        elif "Could not read selection" in clean_msg:
+            clean_msg = "Cannot read selected text"
+
+        # Keep it short (max ~60 chars) to avoid huge pills
+        if len(clean_msg) > 60:
+            clean_msg = clean_msg[:57] + "..."
+
+        full_msg = f"Error: {clean_msg}"
+
         if self._active_qr_loader:
-            self._active_qr_loader.set_error(message)
-            # If it's a transient loader, it's already visible.
-            # If it's the ball, it's already visible.
-            # We might want to hide it after a few seconds.
-            QTimer.singleShot(3000, self._clear_qr_loader)
+            loader = self._active_qr_loader
+            loader.set_error(full_msg)
+            QTimer.singleShot(3000, lambda: self._clear_qr_loader(loader))
             return
 
         # Fallback to the old toast logic if no loader is active
@@ -327,15 +341,19 @@ class AIWriterApp(QObject):
             toast_host.show()
         QuickReplaceToast.show_error(toast_host, message)
 
-    def _clear_qr_loader(self) -> None:
+    def _clear_qr_loader(self, loader: Optional[QWidget] = None) -> None:
         """Reset the active QR loader to IDLE and hide if transient."""
-        if self._active_qr_loader:
-            if isinstance(self._active_qr_loader, TransientPencilLoader):
-                self._active_qr_loader.set_error(None)
-                self._active_qr_loader.hide()
+        target = loader or self._active_qr_loader
+        if target:
+            if isinstance(target, TransientPencilLoader):
+                target.set_error(None)
+                target.set_loading(False)
+                target.hide()
             else:
                 self._window.set_settings_ball_loading(False)
-            self._active_qr_loader = None
+
+            if target == self._active_qr_loader:
+                self._active_qr_loader = None
 
     def _quit(self) -> None:
         self._cleanup_worker()

@@ -1803,6 +1803,7 @@ class PencilLoaderWidget(QWidget):
         super().__init__(parent, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setFixedSize(QSize(54, 54))
+        self._locked = False
 
         self._state = self.IDLE
         self._error_msg: str | None = None
@@ -1827,6 +1828,7 @@ class PencilLoaderWidget(QWidget):
         self.update()
 
     def set_loading(self, loading: bool) -> None:
+        self._locked = loading
         if loading:
             self._state = self.LOADING
             self._timer.start()
@@ -1839,8 +1841,10 @@ class PencilLoaderWidget(QWidget):
         if message:
             self._state = self.ERROR
             self._error_msg = message
-            # Expand to fit text (pill shape)
-            self.setFixedSize(QSize(240, 54))
+            # Calculate a dynamic width based on text length to avoid clipping
+            # Base width 240, plus some extra for longer messages, max 450
+            estimated_width = max(240, min(450, len(message) * 8 + 80))
+            self.setFixedSize(QSize(estimated_width, 54))
         else:
             self._state = self.IDLE
             self._error_msg = None
@@ -1868,7 +1872,7 @@ class PencilLoaderWidget(QWidget):
                 font.setFamily("Comfortaa")
                 font.setPixelSize(12)
                 painter.setFont(font)
-                painter.drawText(text_rect, Qt.AlignVCenter | Qt.AlignLeft, self._error_msg)
+                painter.drawText(text_rect, Qt.AlignVCenter | Qt.AlignLeft | Qt.TextWordWrap, self._error_msg)
 
             # Draw small pencil icon on the left
             if self._pencil_pixmap:
@@ -1932,6 +1936,8 @@ class BallWidget(PencilLoaderWidget):
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.LeftButton and not self._dragging:
+            if getattr(self, "_locked", False):
+                return
             self.expand_requested.emit()
         self._drag_pos = self._press_pos = None; self._dragging = False
         super().mouseReleaseEvent(event)

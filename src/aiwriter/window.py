@@ -517,6 +517,10 @@ class FloatingWindow(QWidget):
         if self._settings_window is not None and self._settings_window.isVisible():
             self._settings_window.hide()
 
+        # Also hide the minimized ball if it's visible
+        if self._settings_window and self._settings_window._ball and self._settings_window._ball.isVisible():
+            self._settings_window._ball.hide()
+
         self._original_label.setText("Original")
         self._original.setReadOnly(True)
         self._original.setPlainText(text)
