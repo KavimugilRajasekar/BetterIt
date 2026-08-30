@@ -397,6 +397,17 @@ class ExpandOverlay(QFrame):
                 border: 2px solid #d0d0d0;
                 border-radius: 20px;
             }
+            QTextEdit {
+                background-color: rgba(255, 255, 255, 0.95);
+                color: #0a1a0a;
+                border: 2px solid #0a0a0a;
+                border-radius: 18px;
+                padding: 12px 14px;
+                font-size: 13px;
+                selection-background-color: #4caf84;
+                selection-color: #ffffff;
+                font-family: 'Comfortaa';
+            }
         """)
         self._target_edit = target_edit
         self._parent_container = parent_container
@@ -663,12 +674,34 @@ class EditTagPage(QWidget):
         right_card = QFrame(); right_card.setObjectName("SingleWhiteCard")
         rl = QVBoxLayout(right_card); rl.setContentsMargins(16, 16, 16, 16); rl.setSpacing(10)
 
-        nl = QLabel("Tag Name"); nl.setObjectName("SectionLabel"); rl.addWidget(nl)
+        name_row = QHBoxLayout()
+        name_row.setSpacing(4)
+        nl = QLabel("Tag Name")
+        nl.setObjectName("SectionLabel")
+        self._name_dot = QLabel("•")
+        self._name_dot.setStyleSheet("color: #1b5e20; font-size: 14px;")
+        self._name_dot.setAlignment(Qt.AlignCenter)
+        self._name_dot.hide()
+        name_row.addWidget(nl)
+        name_row.addWidget(self._name_dot)
+        name_row.addStretch(1)
+        rl.addLayout(name_row)
         self._name_edit = QLineEdit(); self._name_edit.setPlaceholderText("e.g. LinkedIn Post, Professional Email…")
         self._name_edit.textChanged.connect(self._check_dirty)
         rl.addWidget(self._name_edit)
 
-        pl = QLabel("Instructions"); pl.setObjectName("SectionLabel"); rl.addWidget(pl)
+        inst_row = QHBoxLayout()
+        inst_row.setSpacing(4)
+        pl = QLabel("Instructions")
+        pl.setObjectName("SectionLabel")
+        self._prompt_dot = QLabel("•")
+        self._prompt_dot.setStyleSheet("color: #1b5e20; font-size: 14px;")
+        self._prompt_dot.setAlignment(Qt.AlignCenter)
+        self._prompt_dot.hide()
+        inst_row.addWidget(pl)
+        inst_row.addWidget(self._prompt_dot)
+        inst_row.addStretch(1)
+        rl.addLayout(inst_row)
 
         vt = QHBoxLayout(); vt.setSpacing(8)
         self._raw_btn = QPushButton("Raw"); self._raw_btn.setObjectName("ViewToggle")
@@ -736,7 +769,14 @@ class EditTagPage(QWidget):
         curr_p = self._prompt_edit.toPlainText().strip()
         orig_n = (self._saved_name or "").strip()
         orig_p = (self._saved_prompt or "").strip()
-        dirty = (curr_n != orig_n) or (curr_p != orig_p)
+
+        name_dirty = curr_n != orig_n
+        prompt_dirty = curr_p != orig_p
+
+        self._name_dot.setVisible(name_dirty)
+        self._prompt_dot.setVisible(prompt_dirty)
+
+        dirty = name_dirty or prompt_dirty
         self._save_btn.setEnabled(dirty and bool(curr_n) and bool(curr_p))
 
     def _show_raw(self):
@@ -779,7 +819,7 @@ class EditTagPage(QWidget):
         self._saved_prompt = p
         self._name_edit.blockSignals(False)
         self._prompt_edit.blockSignals(False)
-        self._save_btn.setEnabled(False)
+        self._check_dirty()
         self._del_btn.setEnabled(True)
 
     def _on_new(self):
@@ -793,7 +833,7 @@ class EditTagPage(QWidget):
         self._saved_prompt = ""
         self._name_edit.blockSignals(False)
         self._prompt_edit.blockSignals(False)
-        self._save_btn.setEnabled(False)
+        self._check_dirty()
         self._show_raw(); self._del_btn.setEnabled(False); self._name_edit.setFocus()
 
     def _on_save(self):

@@ -446,6 +446,12 @@ QPushButton#Primary {
     border-color: #0a0a0a;
 }
 
+QPushButton#Primary:disabled {
+    background-color: #7daa8a;
+    color: #d4e8d4;
+    border-color: #3a4a3a;
+}
+
 QPushButton#Primary:hover {
     background-color: #2e7d32;
 }

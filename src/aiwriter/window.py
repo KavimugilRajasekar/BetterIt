@@ -543,6 +543,7 @@ class FloatingWindow(QWidget):
                 geo.center().x() - self.width() // 2,
                 geo.center().y() - self.height() // 2,
             )
+        self._update_window_flags()
         self.show()
 
     def _on_open_settings_clicked(self) -> None:
@@ -638,6 +639,18 @@ class FloatingWindow(QWidget):
         self._reset_to_idle()
         self.hide()
         self.closed.emit()
+
+    def _update_window_flags(self) -> None:
+        """Sync window flags with the 'always_on_top' configuration."""
+        on_top = self._tag_store.get_config("always_on_top", True)
+        flags = self.windowFlags()
+        if on_top:
+            flags |= Qt.WindowStaysOnTopHint
+        else:
+            flags &= ~Qt.WindowStaysOnTopHint
+
+        if flags != self.windowFlags():
+            self.setWindowFlags(flags)
 
     def _reset_to_idle(self) -> None:
         self._original_label.setText("Original")
