@@ -36,6 +36,14 @@ QLabel#SettingsTitle {
     font-family: 'Playwrite US Modern', 'Comfortaa', sans-serif;
 }
 
+QLabel#SectionHeader {
+    color: #0a2e0a;
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    font-family: 'Playwrite US Modern', 'Comfortaa', sans-serif;
+}
+
 QLabel#PopupTitle {
     color: #0a2e0a;
     font-size: 17px;
