@@ -87,7 +87,9 @@ class AIWriterApp(QObject):
     # -- Wiring ------------------------------------------------------------
 
     def _setup_tray(self) -> None:
-        icon = self._qt.style().standardIcon(
+        from . import get_resource_path
+        icon_path = get_resource_path("assets/pencil.png")
+        icon = QIcon(icon_path) if os.path.exists(icon_path) else self._qt.style().standardIcon(
             self._qt.style().StandardPixmap.SP_DialogApplyButton
         )
         self._tray = QSystemTrayIcon(icon, self._qt)

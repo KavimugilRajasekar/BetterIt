@@ -85,7 +85,7 @@ class TagStore:
     # -- Tag management ----------------------------------------------------
 
     def load(self) -> None:
-        # 1. Try loading from user directory
+        # Try loading from user directory
         if self._path.exists():
             try:
                 data = json.loads(self._path.read_text(encoding="utf-8"))
@@ -95,21 +95,8 @@ class TagStore:
             except (json.JSONDecodeError, OSError):
                 pass
 
-        # 2. Fallback: try loading bundled defaults
-        bundled_path = Path(get_resource_path("src/aiwriter/tags.json"))
-        if bundled_path.exists():
-            try:
-                data = json.loads(bundled_path.read_text(encoding="utf-8"))
-                if isinstance(data, dict) and data:
-                    self._tags = {str(k): str(v) for k, v in data.items()}
-                    self.save() # Copy defaults to user dir
-                    return
-            except (json.JSONDecodeError, OSError):
-                pass
-
-        # 3. Absolute fallback to hardcoded defaults
-        self._tags = dict(DEFAULT_TAGS)
-        self.save()
+        # If no user tags, start empty. User must add tags manually.
+        self._tags = {}
 
     def save(self) -> None:
         try:
@@ -151,8 +138,10 @@ class TagStore:
     # -- Config & Key Spaces management ------------------------------------
 
     def load_config(self) -> None:
+        # Start with baseline defaults for general settings flags
         self._config = dict(DEFAULT_CONFIG)
-        # 1. Try loading from user directory
+
+        # Load user overrides from directory
         if self._config_path.exists():
             try:
                 data = json.loads(self._config_path.read_text(encoding="utf-8"))
@@ -162,37 +151,8 @@ class TagStore:
             except (json.JSONDecodeError, OSError):
                 pass
 
-        # 2. Fallback: try loading bundled defaults
-        bundled_config_path = Path(get_resource_path("src/aiwriter/config.json"))
-        if bundled_config_path.exists():
-            try:
-                data = json.loads(bundled_config_path.read_text(encoding="utf-8"))
-                if isinstance(data, dict):
-                    self._config.update(data)
-                    self.save_config() # Copy defaults to user dir
-                    return
-            except (json.JSONDecodeError, OSError):
-                pass
-
-        # Seed key_spaces if still empty/missing
-        spaces = self._config.get("key_spaces")
-        if not isinstance(spaces, list) or not spaces:
-            initial_key = os.environ.get("OPEN_ROUTER", "")
-            initial_model = self._config.get("model") or os.environ.get("MODEL", "openai/gpt-4o-mini")
-            models_list = list(DEFAULT_MODELS)
-            if initial_model and initial_model not in models_list:
-                models_list.insert(0, initial_model)
-
-            self._config["key_spaces"] = [
-                {
-                    "name": "Default Space",
-                    "api_key": initial_key,
-                    "models": models_list,
-                    "selected_model": initial_model,
-                }
-            ]
-            self._config["active_key_space"] = "Default Space"
-
+        # We no longer seed initial profiles/key_spaces automatically.
+        # The user must create their first profile manually in the UI.
         self.save_config()
 
     def save_config(self) -> None:
