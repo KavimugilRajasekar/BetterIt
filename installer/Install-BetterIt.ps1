@@ -6,7 +6,6 @@ $ErrorActionPreference = "Stop"
 
 # ============================================================
 # BetterIt Installer
-# GitHub: https://github.com/KavimugilRajasekar/BetterIt
 # ============================================================
 
 $RepoOwner = "KavimugilRajasekar"
@@ -30,7 +29,7 @@ function Write-Header {
 
     Write-Host ""
     Write-Host "  BetterIt" -ForegroundColor Cyan
-    Write-Host "  ─────────────────────────────────────────────" -ForegroundColor DarkGray
+    Write-Host "  ---------------------------------------------" -ForegroundColor DarkGray
     Write-Host ""
 }
 
@@ -51,20 +50,11 @@ function Write-Success {
     Write-Host "  [OK] $Message" -ForegroundColor Green
 }
 
-function Write-Failure {
-    param(
-        [string]$Message
-    )
-
-    Write-Host ""
-    Write-Host "  [ERROR] $Message" -ForegroundColor Red
-}
-
 # ============================================================
-# Download Progress
+# Download BetterIt.exe
 # ============================================================
 
-function Download-FileWithProgress {
+function Download-BetterIt {
     param(
         [Parameter(Mandatory = $true)]
         [string]$Url,
@@ -73,44 +63,100 @@ function Download-FileWithProgress {
         [string]$Destination
     )
 
-    $tempDownload = "$Destination.download"
+    $downloadFile = "$Destination.download"
 
-    if (Test-Path $tempDownload) {
-        Remove-Item $tempDownload -Force -ErrorAction SilentlyContinue
+    if (Test-Path $downloadFile) {
+        Remove-Item $downloadFile -Force -ErrorAction SilentlyContinue
     }
+
+    Write-Host ""
+    Write-Host "  Downloading BetterIt" -ForegroundColor Cyan
+    Write-Host ""
+
+    # --------------------------------------------------------
+    # Start BITS download
+    # --------------------------------------------------------
+
+    $job = Start-BitsTransfer `
+        -Source $Url `
+        -Destination $downloadFile `
+        -DisplayName "BetterIt" `
+        -Description "Downloading BetterIt.exe" `
+        -Asynchronous
 
     try {
 
-        # Use BITS for reliable Windows downloads.
-        # BITS works in Windows PowerShell 5.1 and supports
-        # background/resumable downloads.
-
-        $bitsJob = Start-BitsTransfer `
-            -Source $Url `
-            -Destination $tempDownload `
-            -DisplayName "BetterIt Download" `
-            -Description "Downloading BetterIt.exe" `
-            -Asynchronous
-
         while ($true) {
 
-            $bitsJob = Get-BitsTransfer -JobId $bitsJob.JobId
+            $job = Get-BitsTransfer -JobId $job.JobId -ErrorAction Stop
 
-            $bytesTransferred = [double]$bitsJob.BytesTransferred
-            $bytesTotal = [double]$bitsJob.BytesTotal
+            $state = $job.JobState
+
+            if ($state -eq "Transferred") {
+
+                Complete-BitsTransfer -BitsJob $job
+
+                if (-not (Test-Path $downloadFile)) {
+                    throw "Download completed but the downloaded file was not found."
+                }
+
+                Move-Item -Path $downloadFile -Destination $Destination -Force
+
+                # Draw final 100% progress bar.
+                $bar = "####################################"
+
+                Write-Host "`r  [$bar] 100%   " -NoNewline -ForegroundColor Green
+                Write-Host ""
+                Write-Host ""
+
+                return
+            }
+
+            if ($state -eq "Error") {
+
+                $errorDescription = $job.ErrorDescription
+
+                Remove-BitsTransfer `
+                    -BitsJob $job `
+                    -Confirm:$false `
+                    -ErrorAction SilentlyContinue
+
+                throw "BITS download failed: $errorDescription"
+            }
+
+            if ($state -eq "Cancelled") {
+
+                Remove-BitsTransfer `
+                    -BitsJob $job `
+                    -Confirm:$false `
+                    -ErrorAction SilentlyContinue
+
+                throw "The download was cancelled."
+            }
+
+            # ------------------------------------------------
+            # Calculate progress
+            # ------------------------------------------------
+
+            $bytesReceived = [double]$job.BytesTransferred
+            $bytesTotal = [double]$job.BytesTotal
 
             if ($bytesTotal -gt 0) {
 
-                $percent = [math]::Floor(
-                    ($bytesTransferred / $bytesTotal) * 100
+                $percentage = [math]::Floor(
+                    ($bytesReceived / $bytesTotal) * 100
                 )
 
-                if ($percent -gt 100) {
-                    $percent = 100
+                if ($percentage -gt 100) {
+                    $percentage = 100
+                }
+
+                if ($percentage -lt 0) {
+                    $percentage = 0
                 }
 
                 $downloadedMB = [math]::Round(
-                    $bytesTransferred / 1MB,
+                    $bytesReceived / 1MB,
                     2
                 )
 
@@ -122,7 +168,7 @@ function Download-FileWithProgress {
                 $barWidth = 36
 
                 $filled = [math]::Floor(
-                    ($percent / 100) * $barWidth
+                    ($percentage / 100) * $barWidth
                 )
 
                 $empty = $barWidth - $filled
@@ -135,83 +181,31 @@ function Download-FileWithProgress {
                     $empty = 0
                 }
 
-                $bar = ("█" * $filled) + ("░" * $empty)
+                $bar = ("#" * $filled) + ("-" * $empty)
 
-                $line = "  [$bar] $percent%  $downloadedMB MB / $totalMB MB"
+                $display = "  [$bar] $percentage%  $downloadedMB MB / $totalMB MB"
 
-                Write-Host "`r$line" -NoNewline -ForegroundColor Cyan
+                Write-Host "`r$display" -NoNewline -ForegroundColor Cyan
             }
             else {
 
-                Write-Host "`r  [Downloading...] " -NoNewline -ForegroundColor Cyan
-            }
-
-            switch ($bitsJob.JobState) {
-
-                "Transferred" {
-
-                    Complete-BitsTransfer -BitsJob $bitsJob
-
-                    Write-Host ""
-                    Write-Host ""
-
-                    if (-not (Test-Path $tempDownload)) {
-                        throw "The download completed but the downloaded file was not found."
-                    }
-
-                    Move-Item `
-                        -Path $tempDownload `
-                        -Destination $Destination `
-                        -Force
-
-                    return
-                }
-
-                "Error" {
-
-                    $errorMessage = $bitsJob.ErrorDescription
-
-                    Remove-BitsTransfer `
-                        -BitsJob $bitsJob `
-                        -Confirm:$false `
-                        -ErrorAction SilentlyContinue
-
-                    throw "BITS download failed: $errorMessage"
-                }
-
-                "Cancelled" {
-
-                    Remove-BitsTransfer `
-                        -BitsJob $bitsJob `
-                        -Confirm:$false `
-                        -ErrorAction SilentlyContinue
-
-                    throw "The download was cancelled."
-                }
-
-                "TransientError" {
-
-                    if ($bitsJob.ErrorDescription) {
-                        throw "BITS download error: $($bitsJob.ErrorDescription)"
-                    }
-                }
+                Write-Host "`r  [------------------------------------]  Preparing download..." -NoNewline -ForegroundColor Cyan
             }
 
             Start-Sleep -Milliseconds 150
         }
-
     }
     catch {
 
-        if ($bitsJob) {
+        if ($job) {
             Remove-BitsTransfer `
-                -BitsJob $bitsJob `
+                -BitsJob $job `
                 -Confirm:$false `
                 -ErrorAction SilentlyContinue
         }
 
-        if (Test-Path $tempDownload) {
-            Remove-Item $tempDownload -Force -ErrorAction SilentlyContinue
+        if (Test-Path $downloadFile) {
+            Remove-Item $downloadFile -Force -ErrorAction SilentlyContinue
         }
 
         throw $_
@@ -219,7 +213,7 @@ function Download-FileWithProgress {
 }
 
 # ============================================================
-# Start
+# Main Installer
 # ============================================================
 
 try {
@@ -229,14 +223,18 @@ try {
     Write-Step "Preparing BetterIt installation..."
 
     # --------------------------------------------------------
-    # Check Administrator
+    # Administrator check
     # --------------------------------------------------------
 
-    $currentIdentity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 
-    $principal = New-Object Security.Principal.WindowsPrincipal($currentIdentity)
+    $principal = New-Object Security.Principal.WindowsPrincipal($identity)
 
-    if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    $isAdmin = $principal.IsInRole(
+        [Security.Principal.WindowsBuiltInRole]::Administrator
+    )
+
+    if (-not $isAdmin) {
         throw "Administrator privileges are required."
     }
 
@@ -244,189 +242,158 @@ try {
     # Prepare temporary directory
     # --------------------------------------------------------
 
+    Write-Step "Preparing temporary directory..."
+
     if (Test-Path $TempDir) {
         Remove-Item $TempDir -Recurse -Force -ErrorAction SilentlyContinue
     }
 
-    New-Item `
-        -ItemType Directory `
-        -Path $TempDir `
-        -Force | Out-Null
+    New-Item -ItemType Directory -Path $TempDir -Force | Out-Null
 
     # --------------------------------------------------------
-    # Fetch latest release metadata
+    # Check latest release
     # --------------------------------------------------------
 
     Write-Step "Checking latest BetterIt release..."
 
     $headers = @{
         "User-Agent" = "BetterIt-Installer"
-        "Accept"     = "application/vnd.github+json"
+        "Accept" = "application/vnd.github+json"
     }
 
-    $Release = Invoke-RestMethod `
-        -Uri $ApiUrl `
-        -Headers $headers `
-        -Method Get
+    $release = Invoke-RestMethod -Uri $ApiUrl -Headers $headers -Method Get
 
-    if (-not $Release) {
+    if (-not $release) {
         throw "Unable to retrieve the latest BetterIt release."
     }
 
-    $Version = $Release.tag_name
+    $version = $release.tag_name
 
-    if ([string]::IsNullOrWhiteSpace($Version)) {
-        $Version = $Release.name
+    if ([string]::IsNullOrWhiteSpace($version)) {
+        $version = $release.name
+    }
+
+    if ([string]::IsNullOrWhiteSpace($version)) {
+        throw "The latest BetterIt release does not have a valid version."
     }
 
     # --------------------------------------------------------
-    # Locate BetterIt.exe
+    # Find BetterIt.exe
     # --------------------------------------------------------
 
-    $ExeAsset = $Release.assets |
+    Write-Step "Finding BetterIt.exe..."
+
+    $exeAsset = $release.assets |
         Where-Object {
             $_.name -ieq "BetterIt.exe"
         } |
         Select-Object -First 1
 
-    if (-not $ExeAsset) {
+    if (-not $exeAsset) {
 
-        # Fallback:
-        # Search for an executable containing "BetterIt"
-
-        $ExeAsset = $Release.assets |
+        $exeAsset = $release.assets |
             Where-Object {
                 $_.name -match "(?i)BetterIt.*\.exe$"
             } |
             Select-Object -First 1
     }
 
-    if (-not $ExeAsset) {
+    if (-not $exeAsset) {
         throw "BetterIt.exe was not found in the latest GitHub release."
     }
 
-    $DownloadUrl = $ExeAsset.browser_download_url
+    $downloadUrl = $exeAsset.browser_download_url
+
+    if ([string]::IsNullOrWhiteSpace($downloadUrl)) {
+        throw "The BetterIt.exe download URL is invalid."
+    }
 
     # --------------------------------------------------------
     # Download
     # --------------------------------------------------------
 
-    Write-Host ""
-    Write-Host "  Downloading BetterIt $Version" -ForegroundColor Cyan
-    Write-Host ""
-
-    Download-FileWithProgress `
-        -Url $DownloadUrl `
-        -Destination $TempExe
+    Download-BetterIt -Url $downloadUrl -Destination $TempExe
 
     # --------------------------------------------------------
-    # Verify downloaded file
+    # Verify download
     # --------------------------------------------------------
 
     if (-not (Test-Path $TempExe)) {
         throw "BetterIt.exe could not be downloaded."
     }
 
-    $DownloadedSize = (Get-Item $TempExe).Length
+    $downloadedSize = (Get-Item $TempExe).Length
 
-    if ($DownloadedSize -le 0) {
+    if ($downloadedSize -le 0) {
         throw "Downloaded BetterIt.exe is empty."
     }
 
-    Write-Success "Latest BetterIt release downloaded."
+    Write-Success "BetterIt $version downloaded successfully."
 
     # --------------------------------------------------------
-    # Stop currently running BetterIt
+    # Stop existing BetterIt
     # --------------------------------------------------------
 
     Write-Step "Stopping existing BetterIt instance..."
 
-    Get-Process `
-        -Name "BetterIt" `
-        -ErrorAction SilentlyContinue |
-        Stop-Process `
-            -Force `
-            -ErrorAction SilentlyContinue
+    $existingProcesses = Get-Process -Name "BetterIt" -ErrorAction SilentlyContinue
 
-    Start-Sleep -Milliseconds 500
+    if ($existingProcesses) {
+        $existingProcesses | Stop-Process -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Milliseconds 500
+    }
 
     # --------------------------------------------------------
-    # Remove existing installation
+    # Prepare installation directory
     # --------------------------------------------------------
 
     Write-Step "Preparing installation directory..."
 
     if (Test-Path $InstallDir) {
 
-        # Remove everything inside BetterIt
+        Get-ChildItem -Path $InstallDir -Force -ErrorAction SilentlyContinue |
+            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 
-        Get-ChildItem `
-            -Path $InstallDir `
-            -Force `
-            -ErrorAction SilentlyContinue |
-            Remove-Item `
-                -Recurse `
-                -Force `
-                -ErrorAction SilentlyContinue
-
-        # Remove the directory itself
-
-        Remove-Item `
-            $InstallDir `
-            -Recurse `
-            -Force `
-            -ErrorAction SilentlyContinue
+        Remove-Item $InstallDir -Recurse -Force -ErrorAction SilentlyContinue
     }
 
-    New-Item `
-        -ItemType Directory `
-        -Path $InstallDir `
-        -Force | Out-Null
+    New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
 
     # --------------------------------------------------------
-    # Install BetterIt.exe
+    # Install executable
     # --------------------------------------------------------
 
     Write-Step "Installing BetterIt..."
 
-    $InstalledExe = Join-Path $InstallDir "BetterIt.exe"
+    $installedExe = Join-Path $InstallDir "BetterIt.exe"
 
-    Copy-Item `
-        -Path $TempExe `
-        -Destination $InstalledExe `
-        -Force
+    Copy-Item -Path $TempExe -Destination $installedExe -Force
 
-    if (-not (Test-Path $InstalledExe)) {
+    if (-not (Test-Path $installedExe)) {
         throw "BetterIt.exe could not be installed."
     }
 
     # --------------------------------------------------------
-    # Create Startup Shortcut
+    # Create startup shortcut
     # --------------------------------------------------------
 
     Write-Step "Creating Windows startup shortcut..."
 
     if (Test-Path $ShortcutPath) {
-        Remove-Item `
-            $ShortcutPath `
-            -Force `
-            -ErrorAction SilentlyContinue
+        Remove-Item $ShortcutPath -Force -ErrorAction SilentlyContinue
     }
 
-    $WshShell = New-Object -ComObject WScript.Shell
+    $shell = New-Object -ComObject WScript.Shell
 
-    $Shortcut = $WshShell.CreateShortcut($ShortcutPath)
+    $shortcut = $shell.CreateShortcut($ShortcutPath)
 
-    $Shortcut.TargetPath = $InstalledExe
-    $Shortcut.WorkingDirectory = $InstallDir
-    $Shortcut.Description = "BetterIt"
-    $Shortcut.WindowStyle = 1
+    $shortcut.TargetPath = $installedExe
+    $shortcut.WorkingDirectory = $InstallDir
+    $shortcut.Description = "BetterIt"
+    $shortcut.WindowStyle = 1
+    $shortcut.IconLocation = "$installedExe,0"
 
-    # Use the application's icon
-
-    $Shortcut.IconLocation = "$InstalledExe,0"
-
-    $Shortcut.Save()
+    $shortcut.Save()
 
     # --------------------------------------------------------
     # Verify shortcut
@@ -440,20 +407,20 @@ try {
     # Cleanup
     # --------------------------------------------------------
 
-    Remove-Item `
-        $TempDir `
-        -Recurse `
-        -Force `
-        -ErrorAction SilentlyContinue
+    Write-Step "Cleaning up temporary files..."
+
+    if (Test-Path $TempDir) {
+        Remove-Item $TempDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
 
     # --------------------------------------------------------
     # Get installed version
     # --------------------------------------------------------
 
-    $FileVersion = (Get-Item $InstalledExe).VersionInfo.FileVersion
+    $fileVersion = (Get-Item $installedExe).VersionInfo.FileVersion
 
-    if ([string]::IsNullOrWhiteSpace($FileVersion)) {
-        $FileVersion = $Version
+    if ([string]::IsNullOrWhiteSpace($fileVersion)) {
+        $fileVersion = $version
     }
 
     # --------------------------------------------------------
@@ -462,36 +429,35 @@ try {
 
     Write-Step "Starting BetterIt..."
 
-    Start-Process `
-        -FilePath $InstalledExe `
-        -WorkingDirectory $InstallDir
+    Start-Process -FilePath $installedExe -WorkingDirectory $InstallDir
+
+    Start-Sleep -Milliseconds 700
 
     # --------------------------------------------------------
     # Completion
     # --------------------------------------------------------
 
-    Start-Sleep -Milliseconds 700
-
     Clear-Host
 
     Write-Host ""
     Write-Host "  BetterIt" -ForegroundColor Cyan
-    Write-Host "  ─────────────────────────────────────────────" -ForegroundColor DarkGray
+    Write-Host "  ---------------------------------------------" -ForegroundColor DarkGray
     Write-Host ""
 
     Write-Host "  Installation completed successfully." -ForegroundColor Green
     Write-Host ""
 
     Write-Host "  Version      : " -NoNewline -ForegroundColor Gray
-    Write-Host "$FileVersion" -ForegroundColor White
+    Write-Host "$fileVersion" -ForegroundColor White
 
     Write-Host "  Release      : " -NoNewline -ForegroundColor Gray
-    Write-Host "$Version" -ForegroundColor White
+    Write-Host "$version" -ForegroundColor White
 
     Write-Host "  Location     : " -NoNewline -ForegroundColor Gray
-    Write-Host "$InstalledExe" -ForegroundColor White
+    Write-Host "$installedExe" -ForegroundColor White
 
     Write-Host ""
+
     Write-Host "  BetterIt is now running in the background." -ForegroundColor Green
     Write-Host ""
 
@@ -503,23 +469,22 @@ try {
 
     Write-Host "  Your application is all set." -ForegroundColor Green
     Write-Host ""
+
     Write-Host "  Have a wonderful day!" -ForegroundColor Cyan
     Write-Host ""
 
 }
 catch {
 
-    if ($webClient) {
-        $webClient.Dispose()
+    if (Test-Path $TempDir) {
+        Remove-Item $TempDir -Recurse -Force -ErrorAction SilentlyContinue
     }
-
-    $ProgressPreference = "Continue"
 
     Clear-Host
 
     Write-Host ""
     Write-Host "  BetterIt Installation Failed" -ForegroundColor Red
-    Write-Host "  ─────────────────────────────────────────────" -ForegroundColor DarkGray
+    Write-Host "  ---------------------------------------------" -ForegroundColor DarkGray
     Write-Host ""
 
     Write-Host "  $($_.Exception.Message)" -ForegroundColor Red
