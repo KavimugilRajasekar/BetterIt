@@ -15,6 +15,7 @@ from typing import Any, Optional
 from PySide6.QtCore import (
     QByteArray, QEasingCurve, QObject, QPoint, QPropertyAnimation, QRect,
     QSize, Qt, QThread, QTimer, QVariantAnimation, Signal, Slot,
+    QSequentialAnimationGroup,
 )
 from PySide6.QtGui import (
     QBitmap,
@@ -50,6 +51,8 @@ from PySide6.QtWidgets import (
     QTextEdit,
     QVBoxLayout,
     QWidget,
+    QStylePainter,
+    QStyleOptionComboBox,
 )
 
 try:
@@ -74,7 +77,71 @@ POPUP_CORNER_RADIUS = 24
 
 
 # ---------------------------------------------------------------------------
+# Custom Widgets
+# ---------------------------------------------------------------------------
+
+class MarqueeLabel(QLabel):
+    """A QLabel that horizontally scrolls its text seamlessly when too wide,
+    matching the 'Better It' main window's marquee effect.
+    """
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._offset = 0.0
+        self._timer = QTimer(self)
+        self._timer.setInterval(40)
+        self._timer.timeout.connect(self._advance)
+
+    def start(self) -> None:
+        self._offset = 0.0
+        self._timer.start()
+
+    def stop(self) -> None:
+        self._timer.stop()
+        self._offset = 0.0
+
+    def _text_width(self) -> int:
+        return self.fontMetrics().horizontalAdvance(self.text())
+
+    def _advance(self) -> None:
+        self._offset += 1.5
+        gap = 30
+        total = self._text_width() + gap
+        if self._offset >= total:
+            self._offset = 0.0
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        text = self.text()
+        if not text: return
+
+        fm = self.fontMetrics()
+        text_w = fm.horizontalAdvance(text)
+        rect = self.rect()
+        painter.setClipRect(rect)
+        painter.setPen(QColor("#0a2e0a"))
+
+        # Center text vertically: baseline = center + descent/2
+        y = rect.center().y() + fm.descent() // 2
+
+        if text_w <= rect.width():
+            painter.drawText(rect, Qt.AlignCenter, text)
+        else:
+            # Draw the scrolling text
+            x = rect.x() - int(self._offset)
+            painter.drawText(x, y, text)
+
+            # Draw the seamless copy
+            second_x = x + text_w + 30
+            if second_x < rect.right():
+                painter.drawText(second_x, y, text)
+        painter.end()
+
+# ---------------------------------------------------------------------------
 # Outlined SVG Icon factory
+
 # ---------------------------------------------------------------------------
 # All icons follow Material Icons Outlined style:
 #   stroke-based, no filled areas, rounded caps, dark (#1a1a1a) strokes.
@@ -660,12 +727,34 @@ class EditTagPage(QWidget):
 
         left_card = QFrame(); left_card.setObjectName("SettingsCard")
         left_card.setFixedWidth(145)
-        ll = QVBoxLayout(left_card); ll.setContentsMargins(10, 10, 10, 10); ll.setSpacing(8)
+        ll = QVBoxLayout(left_card); ll.setContentsMargins(5, 10, 5, 10); ll.setSpacing(8)
         self._list = QListWidget(); self._list.setObjectName("TagList")
-        self._list.setWordWrap(True)
+        self._list.setWordWrap(False)
         self._list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._list.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._list.itemSelectionChanged.connect(self._on_selection_changed)
         ll.addWidget(self._list, 1)
+
+        # Floating container for long tags
+        self._long_tag_container = QFrame(self)
+        self._long_tag_container.setStyleSheet("""
+            QFrame {
+                background-color: rgba(255, 255, 255, 0.95);
+                color: #0a2e0a;
+                border: 2px solid #0a0a0a;
+                border-radius: 12px;
+            }
+        """)
+        self._long_tag_container.setFixedWidth(300)
+        self._long_tag_container.setFixedHeight(34)
+        self._long_tag_container.hide()
+        self._long_tag_container.raise_()
+
+        self._long_tag_text = MarqueeLabel(self._long_tag_container)
+        self._long_tag_text.setStyleSheet("border: none; background: transparent; color: #0a2e0a; font-family: 'Comfortaa'; font-size: 13px; font-weight: 600;")
+        self._long_tag_text.setGeometry(0, 0, 300, 34)
+        self._long_tag_text.setWordWrap(False)
+        self._long_tag_text.setAlignment(Qt.AlignCenter)
 
         left_vbox = QVBoxLayout(); left_vbox.setSpacing(12); left_vbox.setContentsMargins(0, 0, 0, 0)
         lbl = QLabel("Your Tags"); lbl.setObjectName("SectionHeader"); lbl.setAlignment(Qt.AlignCenter)
@@ -798,7 +887,7 @@ class EditTagPage(QWidget):
         self._list.blockSignals(True); self._list.clear()
         names = self._store.names()
         for n in names:
-            it = QListWidgetItem(n); it.setData(Qt.UserRole, n); self._list.addItem(it)
+            it = QListWidgetItem(n); it.setData(Qt.UserRole, n); it.setToolTip(n); self._list.addItem(it)
         self._list.blockSignals(False)
         target = select if (select and select in names) else (names[0] if names else None)
         if target:
@@ -826,6 +915,29 @@ class EditTagPage(QWidget):
         self._prompt_edit.blockSignals(False)
         self._check_dirty()
         self._del_btn.setEnabled(True)
+        self._on_selection_changed()
+
+    def _on_selection_changed(self):
+        it = self._list.currentItem()
+        if not it:
+            self._long_tag_container.hide()
+            self._long_tag_text.stop()
+            return
+
+        text = it.text()
+        if len(text.split()) > 12:
+            self._long_tag_text.setText(text)
+
+            rect = self._list.visualRect(it)
+            pos = self._list.mapTo(self, rect.topLeft())
+            self._long_tag_container.move(pos.x() + 160, pos.y())
+            self._long_tag_container.show()
+            self._long_tag_container.raise_()
+
+            self._long_tag_text.start()
+        else:
+            self._long_tag_container.hide()
+            self._long_tag_text.stop()
 
     def _on_new(self):
         self._list.clearSelection(); self._list.setCurrentRow(-1)

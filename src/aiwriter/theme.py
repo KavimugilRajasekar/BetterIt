@@ -147,7 +147,7 @@ QFrame#SettingsCard {
     background-color: rgba(255, 255, 255, 0.70);
     border: 2.5px solid #0a0a0a;
     border-radius: 22px;
-    padding: 16px;
+    padding: 8px;
 }
 
 QFrame#SingleWhiteCard {
@@ -275,7 +275,7 @@ QListWidget#TagList QScrollBar:vertical {
 
 QListWidget#TagList::item {
     color: #0a2e0a;
-    padding: 12px 14px;
+    padding: 12px 4px;
     border-radius: 12px;
     font-size: 13px;
     font-weight: 600;
