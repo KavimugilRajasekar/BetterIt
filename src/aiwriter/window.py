@@ -223,6 +223,8 @@ class FloatingWindow(QWidget):
     closed = Signal()
     settings_opened = Signal()           # emitted when Settings window is shown
     settings_closed = Signal()           # emitted when Settings window is hidden/closed
+    ui_became_visible = Signal()         # emitted when FloatingWindow itself shows
+    ui_became_hidden = Signal()          # emitted when FloatingWindow itself hides
 
     def __init__(self, tag_store: TagStore, parent: QWidget | None = None) -> None:
         super().__init__(parent, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
@@ -475,6 +477,9 @@ class FloatingWindow(QWidget):
             self._settings_window.return_requested.connect(self._on_return_from_settings)
             # When settings fully closes (not just minimized), restore the BetterIt window
             self._settings_window.finished.connect(self._on_settings_closed)
+            # Minimize to ball → hotkey re-enabled; ball expand → hotkey suppressed again
+            self._settings_window.minimize_requested.connect(self._on_settings_minimized)
+            self._settings_window.ball_expanded.connect(self._on_settings_ball_expanded)
         else:
             self._settings_window.open_page(page)
 
@@ -494,6 +499,7 @@ class FloatingWindow(QWidget):
         self._settings_window.show()
         self._settings_window.raise_()
         self._settings_window.activateWindow()
+        self.settings_opened.emit()  # tell app.py to suppress the hotkey
 
     def set_settings_ball_loading(self, loading: bool, error: str | None = None) -> None:
         """Proxy loading state to the settings window's ball widget."""
@@ -502,14 +508,23 @@ class FloatingWindow(QWidget):
 
     def _on_return_from_settings(self) -> None:
         """Called when user clicks Return in Settings to go back to BetterIt."""
+        self.settings_closed.emit()  # settings is leaving — hotkey can re-enable
         self.show()
         self.raise_()
         self.activateWindow()
 
     def _on_settings_closed(self) -> None:
         """Called when the Settings dialog is fully closed (not minimized)."""
+        self.settings_closed.emit()  # settings is gone — hotkey can re-enable
         # Don't auto-show; user will trigger via hotkey or tray again.
-        pass
+
+    def _on_settings_minimized(self) -> None:
+        """Settings was minimized to the floating ball — hotkey should work again."""
+        self.settings_closed.emit()
+
+    def _on_settings_ball_expanded(self) -> None:
+        """Ball was clicked to re-open Settings — suppress hotkey again."""
+        self.settings_opened.emit()
 
     def show_for_text(self, text: str) -> None:
         """Populate the original pane and show the window centered; hide Settings first."""
@@ -549,6 +564,7 @@ class FloatingWindow(QWidget):
             )
         self._update_window_flags()
         self.show()
+        self.ui_became_visible.emit()  # hotkey must be suppressed while window is up
 
     def _on_open_settings_clicked(self) -> None:
         self.open_settings("Edit Tag")
@@ -643,6 +659,7 @@ class FloatingWindow(QWidget):
         self._reset_to_idle()
         self.hide()
         self.closed.emit()
+        self.ui_became_hidden.emit()  # hotkey may re-enable now
 
     def _update_window_flags(self) -> None:
         """Sync window flags with the 'always_on_top' configuration."""

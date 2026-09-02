@@ -447,15 +447,24 @@ class QuickReplaceToast(QFrame):
 
 class ExpandOverlay(QFrame):
     """
-    Animated overlay frame that expands a text edit to cover the container window
-    and shrinks back when the shrink button is pressed.
+    Animated overlay that expands the Instructions editor to fill the settings
+    window.
+
+    Behaviour mirrors the inline Raw / Markdown toggle:
+    - Raw mode  → editable QTextEdit; changes sync back to the source editor.
+    - Markdown  → read-only rendered preview; no edits allowed.
+
+    The overlay remembers which mode was active when it was opened and keeps
+    both views in sync with the source ``_prompt_edit`` while it is open.
     """
     def __init__(
         self,
-        target_edit: QTextEdit,
-        parent_container: QWidget,
+        prompt_edit: "QTextEdit",       # the live editable source
+        preview_edit: "QTextEdit",       # the live read-only markdown preview
+        is_markdown_mode: bool,          # which tab was active when expand was clicked
+        parent_container: "QWidget",
         title_text: str,
-        start_widget: QWidget,
+        start_widget: "QWidget",
     ) -> None:
         super().__init__(parent_container)
         self.setObjectName("ExpandOverlayFrame")
@@ -477,25 +486,33 @@ class ExpandOverlay(QFrame):
                 font-family: 'Comfortaa';
             }
         """)
-        self._target_edit = target_edit
+        self._prompt_edit = prompt_edit
+        self._preview_edit = preview_edit
+        self._is_markdown = is_markdown_mode
         self._parent_container = parent_container
         self._start_widget = start_widget
         self._anim: QPropertyAnimation | None = None
         self._start_rect: QRect = QRect()
+        self._updating = False
+        self._base_title = title_text  # e.g. "Instructions  •  Expanded View"
 
+        # ── Layout ────────────────────────────────────────────────────
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 14, 16, 14)
         layout.setSpacing(10)
 
+        # Header: title + shrink button (no Raw/Markdown toggles — mode is fixed at open time)
         hdr = QHBoxLayout()
-        lbl = QLabel(title_text)
-        lbl.setStyleSheet("color: #0a0a0a; font-size: 20px; font-weight: 700; letter-spacing: 0.5px;"
-                              " font-family: 'Playwrite US Modern', 'Comfortaa', sans-serif;")
-        hdr.addWidget(lbl)
+        self._title_lbl = QLabel()  # text set by _update_title() below
+        self._title_lbl.setStyleSheet(
+            "color: #0a0a0a; font-size: 20px; font-weight: 700; letter-spacing: 0.5px;"
+            " font-family: 'Playwrite US Modern', 'Comfortaa', sans-serif;"
+        )
+        hdr.addWidget(self._title_lbl)
         hdr.addStretch(1)
 
         norm_shrink = _svg_icon("shrink", "#1b5e20", 16)
-        hov_shrink = _svg_icon("shrink", "#000000", 16)
+        hov_shrink  = _svg_icon("shrink", "#000000", 16)
         self.shrink_btn = HoverIconButton(norm_shrink, hov_shrink)
         self.shrink_btn.setFixedSize(30, 30)
         self.shrink_btn.setToolTip("Shrink view")
@@ -504,30 +521,65 @@ class ExpandOverlay(QFrame):
         hdr.addWidget(self.shrink_btn)
         layout.addLayout(hdr)
 
-        self._cloned_edit = QTextEdit()
-        self._cloned_edit.setPlainText(target_edit.toPlainText())
-        self._cloned_edit.setReadOnly(target_edit.isReadOnly())
-        self._cloned_edit.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self._cloned_edit.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self._cloned_edit.setStyleSheet(target_edit.styleSheet())
-        layout.addWidget(self._cloned_edit, 1)
+        # ── Single editor: Raw (editable) or Markdown preview (read-only) ──
+        if is_markdown_mode:
+            # Markdown preview — read-only rendered view
+            self._active_edit = QTextEdit()
+            self._active_edit.setReadOnly(True)
+            self._active_edit.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            self._active_edit.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            self._active_edit.setStyleSheet(preview_edit.styleSheet())
+            self._active_edit.setMarkdown(prompt_edit.toPlainText())
+            layout.addWidget(self._active_edit, 1)
+            # Keep preview in sync if source changes externally
+            prompt_edit.textChanged.connect(self._on_source_changed)
+        else:
+            # Raw editor — plain-text only, editable, two-way sync
+            self._active_edit = QTextEdit()
+            self._active_edit.setPlainText(prompt_edit.toPlainText())
+            self._active_edit.setReadOnly(False)
+            self._active_edit.setAcceptRichText(False)
+            self._active_edit.setAutoFormatting(QTextEdit.AutoNone)
+            self._active_edit.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            self._active_edit.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            self._active_edit.setStyleSheet(prompt_edit.styleSheet())
+            layout.addWidget(self._active_edit, 1)
+            self._active_edit.textChanged.connect(self._on_overlay_changed)
+            prompt_edit.textChanged.connect(self._on_source_changed)
 
-        self._updating = False
-        if not target_edit.isReadOnly():
-            self._cloned_edit.textChanged.connect(self._sync_to_target)
-            target_edit.textChanged.connect(self._sync_from_target)
+        # Set the initial title (includes mode label)
+        self._update_title()
 
-    def _sync_to_target(self) -> None:
-        if self._updating: return
+    # ── Toggle handlers ───────────────────────────────────────────────
+
+    def _update_title(self) -> None:
+        """Refresh the header label to include the current mode."""
+        mode = "Markdown" if self._is_markdown else "Raw"
+        self._title_lbl.setText(f"{self._base_title}  •  {mode}")
+
+    # ── Sync logic ────────────────────────────────────────────────────
+
+    def _on_overlay_changed(self) -> None:
+        """Overlay Raw editor changed → push to source."""
+        if self._updating:
+            return
         self._updating = True
-        self._target_edit.setPlainText(self._cloned_edit.toPlainText())
+        self._prompt_edit.setPlainText(self._active_edit.toPlainText())
         self._updating = False
 
-    def _sync_from_target(self) -> None:
-        if self._updating: return
+    def _on_source_changed(self) -> None:
+        """Source prompt_edit changed externally → pull into overlay."""
+        if self._updating:
+            return
         self._updating = True
-        self._cloned_edit.setPlainText(self._target_edit.toPlainText())
+        text = self._prompt_edit.toPlainText()
+        if self._is_markdown:
+            self._active_edit.setMarkdown(text)
+        else:
+            self._active_edit.setPlainText(text)
         self._updating = False
+
+    # ── Animation ─────────────────────────────────────────────────────
 
     def animate_expand(self) -> None:
         start_pt = self._start_widget.mapTo(self._parent_container, QPoint(0, 0))
@@ -823,12 +875,15 @@ class EditTagPage(QWidget):
         self._stack = QStackedWidget()
         self._prompt_edit = QTextEdit()
         self._prompt_edit.setPlaceholderText("Describe the desired style, tone and format… (Markdown supported)")
+        self._prompt_edit.setAcceptRichText(False)                         # always show raw source
+        self._prompt_edit.setAutoFormatting(QTextEdit.AutoNone)            # no auto-bullets/quotes
         self._prompt_edit.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._prompt_edit.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._prompt_edit.textChanged.connect(self._sync_preview)
         self._prompt_edit.textChanged.connect(self._check_dirty)
         self._stack.addWidget(self._prompt_edit)
-        self._preview = QTextEdit(); self._preview.setReadOnly(True)
+        self._preview = QTextEdit()
+        self._preview.setReadOnly(True)
         self._preview.setPlaceholderText("Markdown preview…")
         self._preview.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._preview.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -851,11 +906,16 @@ class EditTagPage(QWidget):
         self.reload()
 
     def _on_expand_prompt(self) -> None:
+        # Pass both editors and the currently active mode so the overlay
+        # opens in the right state (Raw = editable, Markdown = read-only).
+        is_md = self._stack.currentIndex() == 1
         overlay = ExpandOverlay(
-            target_edit=self._prompt_edit,
+            prompt_edit=self._prompt_edit,
+            preview_edit=self._preview,
+            is_markdown_mode=is_md,
             parent_container=self.window(),
             title_text="Instructions  •  Expanded View",
-            start_widget=self._prompt_edit,
+            start_widget=self._stack,
         )
         overlay.animate_expand()
 
@@ -875,11 +935,17 @@ class EditTagPage(QWidget):
         self._save_btn.setEnabled(dirty and bool(curr_n) and bool(curr_p))
 
     def _show_raw(self):
-        self._raw_btn.setChecked(True); self._md_btn.setChecked(False); self._stack.setCurrentIndex(0)
+        self._raw_btn.setChecked(True)
+        self._md_btn.setChecked(False)
+        self._stack.setCurrentIndex(0)
+        self._prompt_edit.setReadOnly(False)   # Raw → editable
 
     def _show_md(self):
-        self._raw_btn.setChecked(False); self._md_btn.setChecked(True)
-        self._sync_preview(); self._stack.setCurrentIndex(1)
+        self._raw_btn.setChecked(False)
+        self._md_btn.setChecked(True)
+        self._sync_preview()
+        self._stack.setCurrentIndex(1)
+        # Markdown preview is always read-only (enforced on the preview widget itself)
 
     def _sync_preview(self):
         self._preview.setMarkdown(self._prompt_edit.toPlainText())
@@ -2101,6 +2167,7 @@ class SettingsWindow(QDialog):
     tags_changed = Signal()
     minimize_requested = Signal()
     return_requested = Signal()
+    ball_expanded = Signal()  # emitted when the minimised ball is clicked to re-open
 
     PAGES = [("Edit Tags", "Edit Tag"), ("General", "General"),
              ("AI Model", "AI Model"), ("About", "About")]
@@ -2227,6 +2294,7 @@ class SettingsWindow(QDialog):
             p.setY(max(0, min(p.y(), g.bottom() - self.height())))
             self.move(p)
         self.show(); self.raise_(); self.activateWindow()
+        self.ball_expanded.emit()  # settings is visible again — suppress hotkey
 
     def set_ball_loading(self, loading: bool, error: str | None = None) -> None:
         """Proxy loading state to the minimized ball widget."""

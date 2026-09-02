@@ -84,6 +84,7 @@ class AIWriterApp(QObject):
         self._qr_hwnd: int = 0
         # Pause quick-replace / normal hotkey while Settings window is visible
         self._settings_open: bool = False
+        self._floating_open: bool = False  # True while FloatingWindow itself is visible
         self._active_qr_loader: Optional[QWidget] = None
 
         self._setup_tray()
@@ -116,9 +117,11 @@ class AIWriterApp(QObject):
         self._window.correct_requested.connect(self._on_correct_requested)
         self._window.replace_requested.connect(self._on_replace_requested)
         self._window.closed.connect(self._on_window_closed)
-        # Track Settings open/close so we can pause the hotkey logic
+        # Suppress hotkey while any BetterIt UI (floating window OR settings) is visible
         self._window.settings_opened.connect(self._on_settings_opened)
         self._window.settings_closed.connect(self._on_settings_closed)
+        self._window.ui_became_visible.connect(self._on_floating_opened)
+        self._window.ui_became_hidden.connect(self._on_floating_closed)
 
     # -- Slots -------------------------------------------------------------
 
@@ -131,10 +134,25 @@ class AIWriterApp(QObject):
         self._settings_open = False
 
     @Slot()
+    def _on_floating_opened(self) -> None:
+        self._floating_open = True
+
+    @Slot()
+    def _on_floating_closed(self) -> None:
+        self._floating_open = False
+
+    @Slot()
     def _on_hotkey(self) -> None:
         """User pressed Ctrl+Space somewhere. Grab the selection and show the UI."""
-        # While Settings is open, ignore the hotkey completely.
-        if self._settings_open:
+        # Suppress the hotkey whenever ANY BetterIt UI surface is visible —
+        # the floating window, the settings window, or the minimised ball.
+        if self._settings_open or self._floating_open:
+            return
+        # Extra safety: check actual widget visibility in case a signal was missed.
+        if self._window.isVisible():
+            return
+        sw = getattr(self._window, "_settings_window", None)
+        if sw is not None and (sw.isVisible() or (sw._ball and sw._ball.isVisible())):
             return
 
         # Capture the source window *before* we touch the clipboard, so the
