@@ -10,7 +10,7 @@ from typing import Optional
 from dotenv import load_dotenv
 from PySide6.QtCore import QObject, QThread, QTimer, Signal, Slot, Qt
 from PySide6.QtGui import QAction, QIcon
-from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
+from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon, QWidget
 
 from . import clipboard, llm
 from .hotkey import GlobalHotkey
@@ -144,15 +144,20 @@ class AIWriterApp(QObject):
     @Slot()
     def _on_hotkey(self) -> None:
         """User pressed Ctrl+Space somewhere. Grab the selection and show the UI."""
-        # Suppress the hotkey whenever ANY BetterIt UI surface is visible —
-        # the floating window, the settings window, or the minimised ball.
-        if self._settings_open or self._floating_open:
+        # Block if the full floating window is visible.
+        if self._floating_open or self._window.isVisible():
             return
-        # Extra safety: check actual widget visibility in case a signal was missed.
-        if self._window.isVisible():
-            return
+
         sw = getattr(self._window, "_settings_window", None)
-        if sw is not None and (sw.isVisible() or (sw._ball and sw._ball.isVisible())):
+
+        # Block if the Settings window itself is fully visible.
+        if sw is not None and sw.isVisible():
+            return
+
+        # Special case: Settings is minimised to the pencil ball.
+        # Show a nudge on the ball so the user knows they need to deal with it first.
+        if sw is not None and sw._ball is not None and sw._ball.isVisible():
+            self._show_ball_nudge(sw._ball)
             return
 
         # Capture the source window *before* we touch the clipboard, so the
@@ -161,13 +166,12 @@ class AIWriterApp(QObject):
         try:
             selected = clipboard.read_selected()
         except Exception as exc:
-            msg = f"Could not read selection: {exc}"
-            self._window.show_error(msg)
+            self._window.show_error(f"Could not read selection: {exc}")
             return
 
         if not selected or not selected.strip():
-            # Nothing was selected — open Settings panel directly instead of floating window
-            self._window.open_settings("Edit Tag", show_return=False)
+            # Nothing selected — reopen the window if it had content, else open Settings.
+            self._window.reopen()
             return
 
         # --- Quick Replace mode ---
@@ -178,10 +182,25 @@ class AIWriterApp(QObject):
 
         self._window.show_for_text(selected)
 
+    # -- Ball nudge --------------------------------------------------------
+
+    def _show_ball_nudge(self, ball) -> None:
+        """Slide the nudge pill out of the pencil ball with animation."""
+        ball.show_nudge("Close Settings first")
+        QTimer.singleShot(2500, lambda: self._clear_ball_nudge(ball))
+
+    def _clear_ball_nudge(self, ball) -> None:
+        try:
+            if ball.isVisible():
+                ball.hide_nudge()  # slides back in, then resets to IDLE
+        except RuntimeError:
+            pass  # ball was destroyed in the meantime
+
+    # -- LLM wiring --------------------------------------------------------
+
     @Slot(str, str)
     def _on_correct_requested(self, text: str, prompt: str = "") -> None:
         """User clicked Polish / Transform. Run the LLM in a worker thread."""
-        # Tear down any previous worker safely.
         self._cleanup_worker()
 
         thread = QThread()
@@ -192,7 +211,6 @@ class AIWriterApp(QObject):
         worker.finished.connect(self._on_llm_finished, Qt.ConnectionType.QueuedConnection)
         worker.failed.connect(self._on_llm_failed, Qt.ConnectionType.QueuedConnection)
 
-        # Clean up thread and worker on finish
         worker.finished.connect(thread.quit, Qt.ConnectionType.QueuedConnection)
         worker.failed.connect(thread.quit, Qt.ConnectionType.QueuedConnection)
         thread.finished.connect(worker.deleteLater)
@@ -213,9 +231,7 @@ class AIWriterApp(QObject):
     @Slot(str)
     def _on_replace_requested(self, corrected: str) -> None:
         """User clicked Replace. Paste into the source app."""
-        # Hide first so the source window comes to the front cleanly.
         self._window.hide()
-        # Tiny delay so the OS focuses the underlying app before we send keys.
         QTimer.singleShot(50, lambda: self._do_paste(corrected))
 
     def _do_paste(self, corrected: str) -> None:
@@ -223,7 +239,6 @@ class AIWriterApp(QObject):
             clipboard.focus_window(self._source_hwnd)
             clipboard.paste_back(corrected)
         except Exception as exc:
-            # Re-show the window with the error so the user knows.
             self._window.show_error(f"Could not paste: {exc}")
 
     def _on_window_closed(self) -> None:
@@ -257,24 +272,20 @@ class AIWriterApp(QObject):
         """Launch an LLM transform in the background and auto-paste the result."""
         self._cleanup_qr_worker()
 
-        # --- Loader Logic ---
-        # 1. Check if the minimized BallWidget is visible
+        # Show loading indicator — proxy to ball if visible, else transient loader.
         ball_visible = False
         sw = getattr(self._window, "_settings_window", None)
         if sw and getattr(sw, "_ball", None) and sw._ball.isVisible():
             ball_visible = True
 
         if ball_visible:
-            # Proxy loading state to the ball
             self._window.set_settings_ball_loading(True)
             self._active_qr_loader = sw._ball
         else:
-            # Show transient loader at bottom-center
             loader = TransientPencilLoader()
             loader.set_loading(True)
             self._active_qr_loader = loader
 
-        # Get the active tag's prompt so QR uses same polish rules.
         try:
             from . import llm as _llm
             prompt = _llm._get_active_prompt()
@@ -301,16 +312,11 @@ class AIWriterApp(QObject):
     @Slot(str)
     def _on_qr_finished(self, corrected: str) -> None:
         """Quick Replace succeeded — paste result back silently."""
-        # Detect obviously garbled / unusable output (empty, or contains 'Jumple'
-        # which indicates the LLM couldn't handle the text).
         stripped = corrected.strip()
         if not stripped or "jumple" in stripped.lower():
-            # Pass a concise reason that reflects the "Jumbled Words" failure.
-            # _show_qr_error will handle the display and schedule the cleanup.
             self._show_qr_error("AI returned jumbled words")
             return
 
-        # Capture the loader to ensure we reset the correct one if a new request starts
         loader = self._active_qr_loader
         QTimer.singleShot(80, lambda: self._do_qr_paste(corrected, loader))
 
@@ -323,18 +329,14 @@ class AIWriterApp(QObject):
         try:
             clipboard.focus_window(self._qr_hwnd)
             clipboard.paste_back(corrected)
-            # Success: clear the loader that was active for this request
             self._clear_qr_loader(loader)
         except Exception as exc:
             self._show_qr_error(f"Could not paste: {exc}")
 
     def _show_qr_error(self, message: str) -> None:
-        """Show a concise error in the active loader, or fallback to toast."""
-        # 1. Clean up the message to be concise (avoid "Big Big full reasons")
-        # Remove redundant prefixes and technical dumps
+        """Show a concise error in the active loader, or fall back to toast."""
         clean_msg = message
         if "OpenRouter API error" in clean_msg:
-            # Extract just the part after the colon if available
             if ":" in clean_msg:
                 clean_msg = clean_msg.split(":", 1)[-1].strip()
         elif "Unexpected response format" in clean_msg:
@@ -342,7 +344,6 @@ class AIWriterApp(QObject):
         elif "Could not read selection" in clean_msg:
             clean_msg = "Cannot read selected text"
 
-        # Keep it short (max ~60 chars) to avoid huge pills
         if len(clean_msg) > 60:
             clean_msg = clean_msg[:57] + "..."
 
@@ -354,10 +355,8 @@ class AIWriterApp(QObject):
             QTimer.singleShot(3000, lambda: self._clear_qr_loader(loader))
             return
 
-        # Fallback to the old toast logic if no loader is active
-        from PySide6.QtWidgets import QGraphicsOpacityEffect
+        # Fallback toast on the floating window
         toast_host = self._window
-        # If the floating window is hidden, show it at screen centre first.
         if not toast_host.isVisible():
             screen = self._qt.primaryScreen().availableGeometry()
             toast_host.move(
@@ -385,7 +384,6 @@ class AIWriterApp(QObject):
         self._cleanup_worker()
         self._cleanup_qr_worker()
         self._hotkey.stop()
-
         self._qt.quit()
 
     # -- Entry point -------------------------------------------------------

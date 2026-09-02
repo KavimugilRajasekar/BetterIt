@@ -236,6 +236,7 @@ class FloatingWindow(QWidget):
 
         self._tag_store = tag_store
         self._settings_window: SettingsWindow | None = None
+        self._last_text: str = ""  # last text shown; empty means window was fully dismissed
 
         # For dragging
         self._drag_pos: QPoint | None = None
@@ -548,6 +549,7 @@ class FloatingWindow(QWidget):
         self._replace_btn.setEnabled(False)
         self._correct_btn.setEnabled(True)
         self._end_loading_visuals()
+        self._last_text = text  # remember so reopen() can restore it
 
         # Select default tag from configuration if present
         default_tag = self._tag_store.get_config("default_tag")
@@ -654,12 +656,25 @@ class FloatingWindow(QWidget):
         self._correct_btn.setText("Polish")
 
     def hide_window(self) -> None:
-        """Hide and reset for the next invocation."""
+        """Hide and reset for the next invocation (X button — full dismiss)."""
         self._end_loading_visuals()
         self._reset_to_idle()
+        self._last_text = ""  # fully dismissed — don't reopen on next empty hotkey
         self.hide()
         self.closed.emit()
         self.ui_became_hidden.emit()  # hotkey may re-enable now
+
+    def reopen(self) -> None:
+        """Re-show the window.
+
+        - If the window has content from a previous session (user pressed the
+          hotkey but didn't click X, e.g. they clicked away), restore it.
+        - Otherwise fall through to Settings so the user can configure a tag.
+        """
+        if self._last_text:
+            self.show_for_text(self._last_text)
+        else:
+            self.open_settings("Edit Tag", show_return=False)
 
     def _update_window_flags(self) -> None:
         """Sync window flags with the 'always_on_top' configuration."""

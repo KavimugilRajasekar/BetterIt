@@ -16,13 +16,14 @@ from typing import Any, Optional
 from PySide6.QtCore import (
     QByteArray, QEasingCurve, QObject, QPoint, QPropertyAnimation, QRect,
     QSize, Qt, QThread, QTimer, QVariantAnimation, Signal, Slot,
-    QSequentialAnimationGroup,
+    QSequentialAnimationGroup, Property,
 )
 from PySide6.QtGui import (
     QBitmap,
     QBrush,
     QColor,
     QFont,
+    QFontMetrics,
     QIcon,
     QImage,
     QMouseEvent,
@@ -2035,10 +2036,27 @@ class PencilLoaderWidget(QWidget):
     """
     A specialized widget that shows a pencil icon with an optional rotating
     loading border and an expandable error state.
+
+    Nudge animation
+    ---------------
+    ``show_nudge(msg)`` slides the pill out from the pencil (54 → full width)
+    using a QPropertyAnimation on the ``nudge_width`` Qt property.
+    ``hide_nudge()`` slides it back in (full → 54) then resets to IDLE.
     """
     IDLE = 0
     LOADING = 1
     ERROR = 2
+
+    # Expose nudge_width as a Qt property so QPropertyAnimation can drive it.
+    def _get_nudge_width(self) -> int:
+        return self._nudge_width
+
+    def _set_nudge_width(self, w: int) -> None:
+        self._nudge_width = w
+        self.setFixedWidth(w)
+        self.update()
+
+    nudge_width = Property(int, _get_nudge_width, _set_nudge_width)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
@@ -2048,7 +2066,18 @@ class PencilLoaderWidget(QWidget):
 
         self._state = self.IDLE
         self._error_msg: str | None = None
+        self._nudge_width: int = 54
         self._angle = 0
+        self._nudge_anim: QPropertyAnimation | None = None
+
+        # Typewriter state
+        self._visible_chars: int = 0          # how many chars are currently drawn
+        self._typewriter_timer = QTimer(self)
+        self._typewriter_timer.setInterval(38) # ms per character (~26 chars/sec)
+        self._typewriter_timer.timeout.connect(self._typewriter_tick)
+        self._eraser_timer = QTimer(self)
+        self._eraser_timer.setInterval(22)     # erase faster than reveal
+        self._eraser_timer.timeout.connect(self._eraser_tick)
 
         # Loading timer
         self._timer = QTimer(self)
@@ -2079,18 +2108,122 @@ class PencilLoaderWidget(QWidget):
         self.update()
 
     def set_error(self, message: str | None) -> None:
+        """Instant error state — used by QR loader path (no animation)."""
         if message:
             self._state = self.ERROR
             self._error_msg = message
-            # Calculate a dynamic width based on text length to avoid clipping
-            # Base width 240, plus some extra for longer messages, max 450
-            estimated_width = max(240, min(450, len(message) * 8 + 80))
-            self.setFixedSize(QSize(estimated_width, 54))
+            w = self._pill_width_for(message)
+            self._nudge_width = w
+            self.setFixedSize(QSize(w, 54))
         else:
             self._state = self.IDLE
             self._error_msg = None
+            self._nudge_width = 54
             self.setFixedSize(QSize(54, 54))
         self._timer.stop()
+        self.update()
+
+    @staticmethod
+    def _pill_width_for(message: str) -> int:
+        """Return the exact pill width needed to fit *message* at 12px Comfortaa.
+
+        Layout:  12px left-pad | 30px pencil | 8px gap | text | 16px right-pad
+        """
+        font = QFont("Comfortaa")
+        font.setPixelSize(12)
+        text_px = QFontMetrics(font).horizontalAdvance(message)
+        return 12 + 30 + 8 + text_px + 16
+
+    # ── Typewriter callbacks ──────────────────────────────────────────────
+
+    def _typewriter_tick(self) -> None:
+        """Reveal one more character, stop when full message is shown."""
+        if self._error_msg and self._visible_chars < len(self._error_msg):
+            self._visible_chars += 1
+            self.update()
+        else:
+            self._typewriter_timer.stop()
+
+    def _eraser_tick(self) -> None:
+        """Hide one character at a time (used during hide_nudge slide-back)."""
+        if self._visible_chars > 0:
+            self._visible_chars -= 1
+            self.update()
+        else:
+            self._eraser_timer.stop()
+
+    # ── Animated nudge API ────────────────────────────────────────────────
+
+    def show_nudge(self, message: str) -> None:
+        """Slide the pill out from the pencil with animation, then reveal text letter-by-letter."""
+        # Already showing — refresh message but don't restart animation.
+        if self._state == self.ERROR:
+            self._error_msg = message
+            self.update()
+            return
+
+        self._error_msg = message
+        self._state = self.ERROR
+        self._timer.stop()
+
+        # Reset typewriter
+        self._eraser_timer.stop()
+        self._typewriter_timer.stop()
+        self._visible_chars = 0
+
+        # Exact pixel width for this message.
+        target_w = self._pill_width_for(message)
+
+        # Stop any existing animation.
+        if self._nudge_anim and self._nudge_anim.state() == QPropertyAnimation.Running:
+            self._nudge_anim.stop()
+
+        self._nudge_anim = QPropertyAnimation(self, b"nudge_width", self)
+        self._nudge_anim.setDuration(260)
+        self._nudge_anim.setStartValue(54)
+        self._nudge_anim.setEndValue(target_w)
+        self._nudge_anim.setEasingCurve(QEasingCurve.OutCubic)
+        # Start typewriter when pill has fully opened
+        self._nudge_anim.finished.connect(self._typewriter_timer.start)
+        self._nudge_anim.start()
+
+    def hide_nudge(self) -> None:
+        """Erase text letter-by-letter, then slide the pill back into the pencil."""
+        if self._state != self.ERROR:
+            return
+
+        # Stop any active timers / animations first
+        self._typewriter_timer.stop()
+        if self._nudge_anim and self._nudge_anim.state() == QPropertyAnimation.Running:
+            self._nudge_anim.stop()
+
+        # Erase characters, then slide back when done
+        self._eraser_timer.stop()
+        self._eraser_timer = QTimer(self)
+        self._eraser_timer.setInterval(22)
+        self._eraser_timer.timeout.connect(self._eraser_tick)
+
+        def _start_slide_back() -> None:
+            self._eraser_timer.stop()
+            current_w = self.width()
+            self._nudge_anim = QPropertyAnimation(self, b"nudge_width", self)
+            self._nudge_anim.setDuration(200)
+            self._nudge_anim.setStartValue(current_w)
+            self._nudge_anim.setEndValue(54)
+            self._nudge_anim.setEasingCurve(QEasingCurve.InCubic)
+            self._nudge_anim.finished.connect(self._on_hide_nudge_done)
+            self._nudge_anim.start()
+
+        # How long will erasing take?  interval × visible_chars ms
+        erase_ms = self._eraser_timer.interval() * max(self._visible_chars, 1)
+        self._eraser_timer.start()
+        QTimer.singleShot(erase_ms, _start_slide_back)
+
+    def _on_hide_nudge_done(self) -> None:
+        self._state = self.IDLE
+        self._error_msg = None
+        self._nudge_width = 54
+        self.setFixedSize(QSize(54, 54))
         self.update()
 
     def paintEvent(self, event) -> None:
@@ -2099,41 +2232,37 @@ class PencilLoaderWidget(QWidget):
         painter.setRenderHint(QPainter.SmoothPixmapTransform)
 
         if self._state == self.ERROR:
-            # Draw Pill Shape
+            # Draw pill shape — width animates from 54 → full during show_nudge()
             rect = self.rect().adjusted(2, 2, -2, -2)
             painter.setBrush(QBrush(QColor("#1a1a1a")))
             painter.setPen(QPen(QColor("#444444"), 1.5))
             painter.drawRoundedRect(rect, 25, 25)
 
-            # Draw Error Text
-            if self._error_msg:
+            # Draw pencil icon anchored to the left of the pill
+            if self._pencil_pixmap:
+                px = 12
+                py = (self.height() - self._pencil_pixmap.height()) // 2
+                painter.drawPixmap(px, py, self._pencil_pixmap)
+
+            # Draw only the characters revealed so far (typewriter effect)
+            if self._error_msg and self._visible_chars > 0:
+                visible_text = self._error_msg[:self._visible_chars]
                 text_rect = rect.adjusted(50, 0, -10, 0)
                 painter.setPen(QPen(QColor("#ffffff")))
                 font = painter.font()
                 font.setFamily("Comfortaa")
                 font.setPixelSize(12)
                 painter.setFont(font)
-                painter.drawText(text_rect, Qt.AlignVCenter | Qt.AlignLeft | Qt.TextWordWrap, self._error_msg)
-
-            # Draw small pencil icon on the left
-            if self._pencil_pixmap:
-                px = 12
-                py = (self.height() - self._pencil_pixmap.height()) // 2
-                painter.drawPixmap(px, py, self._pencil_pixmap)
+                painter.drawText(text_rect, Qt.AlignVCenter | Qt.AlignLeft, visible_text)
 
         else:
-            # Circular state (IDLE or LOADING)
-            # Draw the pencil first
+            # Circular state (IDLE or LOADING) — always 54×54
             if self._pencil_pixmap:
                 px = (self.width() - self._pencil_pixmap.width()) // 2
                 py = (self.height() - self._pencil_pixmap.height()) // 2
                 painter.drawPixmap(px, py, self._pencil_pixmap)
 
-            # Draw the loading dots
             if self._state == self.LOADING:
-                # No border circle drawn here
-
-                # Single circulating dot
                 num_dots = 1
                 radius = (min(self.width(), self.height()) // 2) - 4
                 cx, cy = self.width() // 2, self.height() // 2
@@ -2145,9 +2274,8 @@ class PencilLoaderWidget(QWidget):
                     dx = radius * math.cos(angle_rad)
                     dy = radius * math.sin(angle_rad)
 
-                    # Color changes in a smooth gradient manner based on rotation angle
-                    hue = self._angle # Use angle (0-359) as the hue
-                    dot_color = QColor.fromHsv(hue, 180, 255) # S=180, V=255 for vibrant colors
+                    hue = self._angle
+                    dot_color = QColor.fromHsv(hue, 180, 255)
 
                     painter.setPen(QPen(dot_color, 4))
                     painter.setBrush(QBrush(dot_color))
