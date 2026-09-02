@@ -15,6 +15,7 @@ from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 from . import clipboard, llm
 from .hotkey import GlobalHotkey
 from .settings import QuickReplaceToast, TransientPencilLoader
+from .single_instance import ensure_single_instance
 from .window import FloatingWindow, load_fonts
 
 
@@ -50,6 +51,11 @@ class AIWriterApp(QObject):
 
     def __init__(self) -> None:
         super().__init__()
+        # Enforce single instance — kills any previous BetterIt process.
+        # ensure_single_instance() is idempotent: if run.py already called it
+        # this call is a no-op (mutex is already owned by this process).
+        ensure_single_instance()
+
         # Load .env before anything tries to read API keys.
         load_dotenv()
 

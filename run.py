@@ -8,6 +8,11 @@ src_path = str(Path(__file__).parent / "src")
 if src_path not in sys.path:
     sys.path.insert(0, src_path)
 
+# Kill any previous BetterIt instance before starting (works for both
+# `python run.py` and the built BetterIt.exe, since both use this file).
+from aiwriter.single_instance import ensure_single_instance
+ensure_single_instance()
+
 from aiwriter.app import main
 
 if __name__ == "__main__":
