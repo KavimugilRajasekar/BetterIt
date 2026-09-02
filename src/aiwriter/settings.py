@@ -1487,28 +1487,31 @@ class ProfileCardWidget(QFrame):
 
     def _animate_result_label(self, model_id: str, expand: bool) -> None:
         """Slide the result label open (expand=True) or shut (expand=False)."""
-        lbl = self._model_result_labels.get(model_id)
-        if not lbl:
-            return
-        lbl.setMaximumHeight(16777215)          # unlock so sizeHint is computed
-        target_h = lbl.sizeHint().height() + 6 if expand else 0
-        lbl.setMaximumHeight(lbl.height())      # re-lock at current height for smooth start
+        try:
+            lbl = self._model_result_labels.get(model_id)
+            if not lbl:
+                return
+            lbl.setMaximumHeight(16777215)          # unlock so sizeHint is computed
+            target_h = lbl.sizeHint().height() + 6 if expand else 0
+            lbl.setMaximumHeight(lbl.height())      # re-lock at current height for smooth start
 
-        anim = self._row_anims.get(model_id)
-        if anim:
-            try:
-                if anim.state() == QPropertyAnimation.Running:
-                    anim.stop()
-            except RuntimeError:
-                pass
+            anim = self._row_anims.get(model_id)
+            if anim:
+                try:
+                    if anim.state() == QPropertyAnimation.Running:
+                        anim.stop()
+                except RuntimeError:
+                    pass
 
-        anim = QPropertyAnimation(lbl, b"maximumHeight", self)
-        anim.setDuration(220)
-        anim.setStartValue(lbl.maximumHeight())
-        anim.setEndValue(target_h)
-        anim.setEasingCurve(QEasingCurve.OutCubic)
-        self._row_anims[model_id] = anim
-        anim.start()
+            anim = QPropertyAnimation(lbl, b"maximumHeight", self)
+            anim.setDuration(220)
+            anim.setStartValue(lbl.maximumHeight())
+            anim.setEndValue(target_h)
+            anim.setEasingCurve(QEasingCurve.OutCubic)
+            self._row_anims[model_id] = anim
+            anim.start()
+        except RuntimeError:
+            pass  # widget already destroyed — ignore
 
     def _on_row_hover(self, model_id: str, hover: bool) -> None:
         """Fade-in or fade-out the test (play) button icon on row hover."""
@@ -1553,7 +1556,38 @@ class ProfileCardWidget(QFrame):
         self._store.update_key_space(self._space_name, selected_model=model_id)
         self.profile_changed.emit()
 
+    def _cancel_test(self, model_id: str) -> None:
+        """Abort an in-flight test for model_id — disconnects signals, quits thread."""
+        self._active_test_models.discard(model_id)
+        worker = self._test_workers.pop(model_id, None)
+        thread = self._test_threads.pop(model_id, None)
+        if worker:
+            try:
+                worker.finished.disconnect()
+            except RuntimeError:
+                pass
+        if thread:
+            try:
+                thread.quit()
+                thread.wait(500)
+            except RuntimeError:
+                pass
+        if not self._active_test_models:
+            self._loading_timer.stop()
+
+    def _cancel_all_tests(self) -> None:
+        """Cancel every in-flight test — called on widget close/deletion."""
+        for model_id in list(self._active_test_models):
+            self._cancel_test(model_id)
+
+    def closeEvent(self, event) -> None:
+        """Ensure all background threads are stopped before the widget is destroyed."""
+        self._cancel_all_tests()
+        super().closeEvent(event)
+
     def _del_model(self, model_id: str) -> None:
+        # Cancel any running test first so its callback never fires on dead widgets
+        self._cancel_test(model_id)
         if self._store.delete_model_from_space(self._space_name, model_id):
             self.profile_changed.emit()
 
@@ -1645,65 +1679,82 @@ class ProfileCardWidget(QFrame):
 
     @Slot(str, bool, str)
     def _on_result(self, model_id: str, success: bool, message: str) -> None:
-        self._active_test_models.discard(model_id)
-        if not self._active_test_models:
-            self._loading_timer.stop()
+        try:
+            self._active_test_models.discard(model_id)
+            if not self._active_test_models:
+                self._loading_timer.stop()
 
-        # Restore Test button
-        btn = self._test_btns.get(model_id)
-        if btn:
-            btn.setEnabled(True)
+            # Restore Test button
+            btn = self._test_btns.get(model_id)
+            if btn:
+                try:
+                    btn.setEnabled(True)
+                    row = self._model_row_frames.get(model_id)
+                    if row and row.underMouse():
+                        btn.setIcon(_svg_icon("play", "#1b5e20", 20))
+                        btn.setToolTip("Test Connection")
+                        self._animate_opacity(model_id, 1.0, 120)
+                    else:
+                        btn.setIcon(QIcon())
+                        btn.setToolTip("")
+                        self._animate_opacity(model_id, 0.0, 250)
+                except RuntimeError:
+                    pass
+
+            # Colour the model row green or red (instant border, fades in via label)
             row = self._model_row_frames.get(model_id)
-            if row and row.underMouse():
-                btn.setIcon(_svg_icon("play", "#1b5e20", 20))
-                btn.setToolTip("Test Connection")
-                self._animate_opacity(model_id, 1.0, 120)
-            else:
-                btn.setIcon(QIcon())
-                btn.setToolTip("")
-                self._animate_opacity(model_id, 0.0, 250)
+            if row:
+                try:
+                    if success:
+                        row.setStyleSheet(
+                            "QFrame{background:rgba(212,248,212,0.90);border:none;border-radius:13px;}")
+                    else:
+                        row.setStyleSheet(
+                            "QFrame{background:rgba(253,216,216,0.90);border:none;border-radius:13px;}")
+                except RuntimeError:
+                    pass
 
-        # Colour the model row green or red (instant border, fades in via label)
-        row = self._model_row_frames.get(model_id)
-        if row:
-            if success:
-                row.setStyleSheet(
-                    "QFrame{background:rgba(212,248,212,0.90);border:none;border-radius:13px;}")
-            else:
-                row.setStyleSheet(
-                    "QFrame{background:rgba(253,216,216,0.90);border:none;border-radius:13px;}")
-
-        # Slide open the result label
-        res_lbl = self._model_result_labels.get(model_id)
-        if res_lbl:
-            if success:
-                res_lbl.setStyleSheet("color: #1b5e20; font-weight: 700; border: none; background: transparent;")
-                res_lbl.setText(f"✓  {message}")
-            else:
-                res_lbl.setStyleSheet("color: #c0392b; font-weight: 700; border: none; background: transparent;")
-                res_lbl.setText(f"✗  {message}")
-            self._animate_result_label(model_id, True)
-
-            # Schedule auto-collapse after 3 seconds
-            QTimer.singleShot(3000, lambda m=model_id: self._collapse_result(m))
+            # Slide open the result label
+            res_lbl = self._model_result_labels.get(model_id)
+            if res_lbl:
+                try:
+                    if success:
+                        res_lbl.setStyleSheet("color: #1b5e20; font-weight: 700; border: none; background: transparent;")
+                        res_lbl.setText(f"✓  {message}")
+                    else:
+                        res_lbl.setStyleSheet("color: #c0392b; font-weight: 700; border: none; background: transparent;")
+                        res_lbl.setText(f"✗  {message}")
+                    self._animate_result_label(model_id, True)
+                    # Schedule auto-collapse after 3 seconds
+                    QTimer.singleShot(3000, lambda m=model_id: self._collapse_result(m))
+                except RuntimeError:
+                    pass
+        except RuntimeError:
+            pass  # card was deleted while result was in-flight — silently discard
 
     def _collapse_result(self, model_id: str | None) -> None:
         """Animate the result label closed and restore row color."""
         if not model_id:
             return
-        self._animate_result_label(model_id, False)
+        try:
+            self._animate_result_label(model_id, False)
 
-        row = self._model_row_frames.get(model_id)
-        if row:
-            models = list(self._space_data.get("models", []))
-            selected = str(self._space_data.get("selected_model", models[0] if models else ""))
-            is_active = (model_id == selected)
-            if is_active:
-                row.setStyleSheet(
-                    "QFrame{background:rgba(237,250,237,0.85);border:none;border-radius:13px;}")
-            else:
-                row.setStyleSheet(
-                    "QFrame{background:rgba(255,255,255,0.55);border:none;border-radius:13px;}")
+            row = self._model_row_frames.get(model_id)
+            if row:
+                try:
+                    models = list(self._space_data.get("models", []))
+                    selected = str(self._space_data.get("selected_model", models[0] if models else ""))
+                    is_active = (model_id == selected)
+                    if is_active:
+                        row.setStyleSheet(
+                            "QFrame{background:rgba(237,250,237,0.85);border:none;border-radius:13px;}")
+                    else:
+                        row.setStyleSheet(
+                            "QFrame{background:rgba(255,255,255,0.55);border:none;border-radius:13px;}")
+                except RuntimeError:
+                    pass
+        except RuntimeError:
+            pass  # widget already destroyed — ignore
 
 
 # ---------------------------------------------------------------------------
@@ -1856,7 +1907,13 @@ class AIModelPage(QWidget):
     def reload(self, animate_space: str | None = None) -> None:
         while self._layout.count():
             it = self._layout.takeAt(0)
-            if it.widget(): it.widget().deleteLater()
+            w = it.widget()
+            if w:
+                # If it's a ProfileCardWidget, abort all in-flight tests before
+                # scheduling deletion — prevents callbacks firing on dead widgets.
+                if isinstance(w, ProfileCardWidget):
+                    w._cancel_all_tests()
+                w.deleteLater()
 
         hdr = QLabel("AI Profile Spaces & Models"); hdr.setObjectName("SectionLabel")
         self._layout.addWidget(hdr)
